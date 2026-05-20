@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
 // ─── Mock Data ─────────────────────────────────────────────────────────────────
-const OPERATORS = ["André", "GU", "Renan", "Kauã", "Ana", "Pedro"];
+const OPERATORS = ["Anna", "André", "Érica", "Gustavo", "Kauã", "Pamela", "Renan"];
 
 const ENSAIOS_DEFAULT = [
   { id: "injecao",       label: "Injeção Corpos de Prova" },
@@ -36,29 +36,7 @@ function mockMaterial(codigo, nome, resina, aplicavel) {
   return { id: crypto.randomUUID(), codigo, nome, resina, cells };
 }
 
-const MOCK_MATERIAIS_HOJE = [
-  mockMaterial("100-0842","PA66 G30","PA66",["injecao","fusao","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("126.0737","PA6 G30","PA6",["injecao","fusao","fluidez","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("300.0380","PBT G20","PBT",["injecao","fusao","fluidez","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("300.0500","26J5","PA66",["injecao","fusao","fluidez","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("100.0322","PBT G30","PBT",["injecao","fusao","fluidez","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("100.0032","PBT G30 NF","PBT",["injecao","fusao","densidade","tracao","flexao","charpy_c","izod_c"]),
-  mockMaterial("100.0004","PA66 G37","PA66",["injecao","fusao","densidade","tracao","flexao","charpy_c","izod_c"]),
-];
-
-function buildHistorico() {
-  const hist = [];
-  for (let d = 1; d <= 15; d++) {
-    const date = new Date(2026,4,d);
-    const mats = Array.from({length:3+Math.floor(Math.random()*5)},(_,i)=>
-      mockMaterial(`MAT-${100+d*10+i}`,`${RESINAS[Math.floor(Math.random()*RESINAS.length)]} G${[10,20,30,40][Math.floor(Math.random()*4)]}`,RESINAS[Math.floor(Math.random()*RESINAS.length)],["injecao","fusao","fluidez","densidade","tracao","flexao","charpy_c","izod_c"])
-    );
-    hist.push({ id:`hist-${d}`, date: date.toISOString().split("T")[0], materiais: mats, finalizado: true });
-  }
-  return hist;
-}
-
-const MOCK_HISTORICO = buildHistorico();
+const MOCK_HISTORICO = [];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -225,12 +203,106 @@ function AddMaterialModal({ onClose, onAdd }) {
   );
 }
 
+// ─── Edit Material Modal ──────────────────────────────────────────────────────
+function EditMaterialModal({ material, onClose, onSave, onRemove }) {
+  const [codigo, setCodigo] = useState(material.codigo);
+  const [nome, setNome]     = useState(material.nome);
+  const [resina, setResina] = useState(material.resina);
+  const [aplicavel, setAplicavel] = useState(
+    ENSAIOS_DEFAULT.filter(e => material.cells[e.id]?.status !== "na").map(e => e.id)
+  );
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  function toggleEnsaio(id) {
+    setAplicavel(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  }
+
+  function save() {
+    if (!codigo.trim()) return;
+    // rebuild cells: keep existing data for applied, mark na for removed
+    const newCells = {};
+    ENSAIOS_DEFAULT.forEach(e => {
+      if (!aplicavel.includes(e.id)) {
+        newCells[e.id] = { status: "na" };
+      } else {
+        // keep existing cell data if was already applied, else start pendente
+        const existing = material.cells[e.id];
+        newCells[e.id] = (existing && existing.status !== "na") ? existing : makeCell("pendente");
+      }
+    });
+    onSave({ ...material, codigo: codigo.trim(), nome: nome.trim() || codigo.trim(), resina, cells: newCells });
+    onClose();
+  }
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.75rem",width:"min(520px,100%)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"1.25rem"}}>
+          <h3 style={{margin:0,fontSize:18,fontWeight:700,color:"#1a1a18"}}>Editar Material</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#aaa",lineHeight:1}}>×</button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1rem"}}>
+          <div>
+            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
+            <input value={codigo} onChange={e=>setCodigo(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
+            <select value={resina} onChange={e=>setResina(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}>
+              {RESINAS.map(r=><option key={r}>{r}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{marginBottom:"1.25rem"}}>
+          <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome / Descrição</label>
+          <input value={nome} onChange={e=>setNome(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
+        </div>
+
+        <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>Ensaios aplicáveis</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:"1.5rem"}}>
+          {ENSAIOS_DEFAULT.map(e => {
+            const ativo = aplicavel.includes(e.id);
+            const temDados = material.cells[e.id]?.status === "concluido" || material.cells[e.id]?.status === "andamento";
+            return (
+              <label key={e.id} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:"#444",padding:"5px 8px",borderRadius:6,background:ativo?"#d4f5e0":"#f7f5f2",border:ativo?"1px solid #86d9a8":"1px solid transparent",transition:"all .12s",position:"relative"}}>
+                <input type="checkbox" checked={ativo} onChange={()=>toggleEnsaio(e.id)} style={{accentColor:"#2eaa5f"}} />
+                {e.label}
+                {temDados && <span title="Tem dados registrados" style={{marginLeft:"auto",fontSize:9,background:"#fff3c4",color:"#8a6800",padding:"1px 5px",borderRadius:4,fontWeight:700}}>dados</span>}
+              </label>
+            );
+          })}
+        </div>
+
+        <div style={{borderTop:"1px solid #f0eeea",paddingTop:"1rem",display:"flex",gap:8,flexWrap:"wrap"}}>
+          {confirmRemove ? (
+            <>
+              <div style={{width:"100%",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#991b1b",marginBottom:4}}>
+                ⚠️ Remover <strong>{material.codigo}</strong> do dashboard? Esta ação não pode ser desfeita.
+              </div>
+              <button onClick={()=>setConfirmRemove(false)} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
+              <button onClick={()=>{onRemove(material.id);onClose();}} style={{flex:2,padding:"9px",borderRadius:8,border:"none",background:"#dc2626",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar Remoção</button>
+            </>
+          ) : (
+            <>
+              <button onClick={()=>setConfirmRemove(true)} style={{padding:"9px 14px",borderRadius:8,border:"1px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,color:"#dc2626",fontWeight:600}}>🗑 Remover</button>
+              <div style={{flex:1}} />
+              <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
+              <button onClick={save} disabled={!codigo.trim()} style={{padding:"9px 20px",borderRadius:8,border:"none",background:codigo.trim()?"#1a3a2a":"#ccc",color:"#fff",cursor:codigo.trim()?"pointer":"default",fontSize:13,fontWeight:600}}>Salvar</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Dashboard Grid ────────────────────────────────────────────────────────────
-function DashboardGrid({ materiais, onUpdateCell, readonly }) {
+function DashboardGrid({ materiais, onUpdateCell, onEditMaterial, readonly }) {
   const [activeCell, setActiveCell] = useState(null);
   const scrollRef = useRef(null);
 
-  const COL_W = 120;
+  const COL_W = 130;
   const ROW_H = 44;
 
   function handleCell(mat, ensaio) {
@@ -251,9 +323,18 @@ function DashboardGrid({ materiais, onUpdateCell, readonly }) {
           <tr style={{background:"#1a3a2a"}}>
             <th style={{padding:"10px 16px",textAlign:"left",color:"#7bc99a",fontSize:11,fontWeight:600,letterSpacing:".07em",textTransform:"uppercase",borderRight:"1px solid #2d5c42"}}>ENSAIO</th>
             {materiais.map(m=>(
-              <th key={m.id} style={{padding:"8px 6px",textAlign:"center",borderRight:"1px solid #2d5c42",cursor:"default"}}>
+              <th key={m.id} style={{padding:"8px 6px",textAlign:"center",borderRight:"1px solid #2d5c42"}}>
                 <div style={{color:"#fff",fontSize:12,fontWeight:700,lineHeight:1.2}}>{m.codigo}</div>
                 <div style={{color:"#7bc99a",fontSize:10,marginTop:2}}>{m.resina}</div>
+                {!readonly && (
+                  <button onClick={()=>onEditMaterial(m)}
+                    title="Editar material"
+                    style={{marginTop:5,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(123,201,154,.35)",background:"rgba(123,201,154,.12)",color:"#7bc99a",cursor:"pointer",fontSize:10,fontWeight:600,letterSpacing:".04em",transition:"all .15s"}}
+                    onMouseEnter={e=>{e.currentTarget.style.background="rgba(123,201,154,.28)";}}
+                    onMouseLeave={e=>{e.currentTarget.style.background="rgba(123,201,154,.12)";}}>
+                    ✎ editar
+                  </button>
+                )}
               </th>
             ))}
           </tr>
@@ -335,9 +416,11 @@ function StatsBar({ progress }) {
 }
 
 // ─── Dashboard Page ────────────────────────────────────────────────────────────
-function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell }) {
+function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell, onEditMaterial, onRemoveMaterial, onLimparDashboard }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showFinalizar, setShowFinalizar] = useState(false);
+  const [showLimpar, setShowLimpar] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState(null);
   const progress = calcProgress(dia.materiais);
 
   return (
@@ -351,11 +434,17 @@ function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell }) {
           <p style={{margin:"4px 0 0",fontSize:15,color:"#888"}}>{fmtDate(dia.date)} — {dia.materiais.length} material{dia.materiais.length!==1?"is":""}</p>
         </div>
         {!dia.finalizado && (
-          <div style={{display:"flex",gap:10}}>
-            <button onClick={()=>setShowAdd(true)} style={{padding:"9px 18px",borderRadius:9,border:"1.5px solid #e0ddd6",background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:"#444",display:"flex",alignItems:"center",gap:6}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>setShowLimpar(true)}
+              style={{padding:"9px 16px",borderRadius:9,border:"1.5px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,fontWeight:600,color:"#dc2626",display:"flex",alignItems:"center",gap:6}}>
+              🗑 Limpar Dashboard
+            </button>
+            <button onClick={()=>setShowAdd(true)}
+              style={{padding:"9px 18px",borderRadius:9,border:"1.5px solid #e0ddd6",background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:"#444",display:"flex",alignItems:"center",gap:6}}>
               <span style={{fontSize:16,lineHeight:1}}>+</span> Adicionar Material
             </button>
-            <button onClick={()=>setShowFinalizar(true)} style={{padding:"9px 20px",borderRadius:9,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>
+            <button onClick={()=>setShowFinalizar(true)}
+              style={{padding:"9px 20px",borderRadius:9,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>
               ✓ Finalizar Dia
             </button>
           </div>
@@ -371,17 +460,66 @@ function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell }) {
           <p style={{fontSize:13,margin:0}}>Clique em "Adicionar Material" para começar</p>
         </div>
       ) : (
-        <DashboardGrid materiais={dia.materiais} onUpdateCell={onUpdateCell} readonly={dia.finalizado} />
+        <DashboardGrid
+          materiais={dia.materiais}
+          onUpdateCell={onUpdateCell}
+          onEditMaterial={setEditingMaterial}
+          readonly={dia.finalizado}
+        />
       )}
 
-      {showAdd&&<AddMaterialModal onClose={()=>setShowAdd(false)} onAdd={mat=>{onAddMaterial(mat);setShowAdd(false);}} />}
+      {/* Modal: Adicionar */}
+      {showAdd && (
+        <AddMaterialModal
+          onClose={()=>setShowAdd(false)}
+          onAdd={mat=>{onAddMaterial(mat);setShowAdd(false);}}
+        />
+      )}
 
-      {showFinalizar&&(
+      {/* Modal: Editar material */}
+      {editingMaterial && (
+        <EditMaterialModal
+          material={editingMaterial}
+          onClose={()=>setEditingMaterial(null)}
+          onSave={mat=>{onEditMaterial(mat);setEditingMaterial(null);}}
+          onRemove={id=>{onRemoveMaterial(id);setEditingMaterial(null);}}
+        />
+      )}
+
+      {/* Modal: Limpar dashboard */}
+      {showLimpar && (
+        <div onClick={()=>setShowLimpar(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:400,boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+            <div style={{width:48,height:48,borderRadius:24,background:"#fef2f2",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,marginBottom:"1rem"}}>🗑</div>
+            <h3 style={{margin:"0 0 .75rem",fontSize:18,fontWeight:700,color:"#1a1a18"}}>Limpar o dashboard?</h3>
+            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>
+              Todos os <strong>{dia.materiais.length} materiais</strong> e seus ensaios serão removidos permanentemente.
+            </p>
+            <p style={{color:"#dc2626",fontSize:13,margin:"0 0 1.5rem",fontWeight:600}}>
+              ⚠️ Esta ação não pode ser desfeita e os dados não serão salvos no histórico.
+            </p>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setShowLimpar(false)} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
+              <button onClick={()=>{onLimparDashboard();setShowLimpar(false);}} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:"#dc2626",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Limpar Tudo</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Finalizar dia */}
+      {showFinalizar && (
         <div onClick={()=>setShowFinalizar(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:380,boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:400,boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
+            <div style={{width:48,height:48,borderRadius:24,background:"#d4f5e0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,marginBottom:"1rem"}}>✓</div>
             <h3 style={{margin:"0 0 .75rem",fontSize:18,fontWeight:700}}>Finalizar o dia?</h3>
-            <p style={{color:"#666",fontSize:14,margin:"0 0 1.5rem",lineHeight:1.6}}>O dashboard de <strong>{fmtDate(dia.date)}</strong> será salvo no histórico. Após finalizar, os dados não poderão ser editados.</p>
-            {progress.pct<100&&<div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>⚠️ Ainda há <strong>{progress.pending}</strong> ensaio{progress.pending!==1?"s":""} pendente{progress.pending!==1?"s":""}.</div>}
+            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>
+              O dashboard de <strong>{fmtDate(dia.date)}</strong> será salvo no histórico e o dashboard será limpo para um novo dia.
+            </p>
+            {progress.pct<100 && (
+              <div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>
+                ⚠️ Ainda há <strong>{progress.pending}</strong> ensaio{progress.pending!==1?"s":""} pendente{progress.pending!==1?"s":""}.
+              </div>
+            )}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>setShowFinalizar(false)} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13}}>Cancelar</button>
               <button onClick={()=>{onFinalizarDia();setShowFinalizar(false);}} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar e Finalizar</button>
@@ -394,12 +532,12 @@ function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell }) {
 }
 
 // ─── Historico Page ────────────────────────────────────────────────────────────
-function HistoricoPage() {
+function HistoricoPage({ historico }) {
   const [busca, setBusca] = useState("");
   const [buscaMat, setBuscaMat] = useState("");
   const [selecionado, setSelecionado] = useState(null);
 
-  const filtrado = MOCK_HISTORICO.filter(h=>{
+  const filtrado = historico.filter(h=>{
     const byDate = !busca || h.date.includes(busca) || fmtDate(h.date).includes(busca);
     const byCod = !buscaMat || h.materiais.some(m=>m.codigo.toLowerCase().includes(buscaMat.toLowerCase())||m.resina.toLowerCase().includes(buscaMat.toLowerCase()));
     return byDate && byCod;
@@ -483,12 +621,12 @@ function Legend() {
 }
 
 // ─── Indicadores Page ─────────────────────────────────────────────────────────
-function IndicadoresPage({ diaAtual }) {
+function IndicadoresPage({ diaAtual, historico }) {
   const [periodo, setPeriodo] = useState("mes");
   const [origem, setOrigem] = useState("historico");
 
   // Constrói o pool de dias a analisar
-  const todosDias = [diaAtual, ...MOCK_HISTORICO];
+  const todosDias = [diaAtual, ...historico];
 
   const diasFiltrados = todosDias.filter(d => {
     if (origem === "hoje") return d.date === today();
@@ -556,7 +694,7 @@ function IndicadoresPage({ diaAtual }) {
   // estado de filtro simplificado
   const [filtro, setFiltro] = useState("mes");
   function getDiasFiltro(f) {
-    const all = [diaAtual, ...MOCK_HISTORICO];
+    const all = [diaAtual, ...historico];
     if (f === "hoje") return all.filter(d => d.date === today());
     if (f === "semana") { const r = new Date(); r.setDate(r.getDate()-7); return all.filter(d => new Date(d.date)>=r); }
     if (f === "mes")    { const r = new Date(); r.setDate(r.getDate()-30); return all.filter(d => new Date(d.date)>=r); }
@@ -728,10 +866,11 @@ function IndicadoresPage({ diaAtual }) {
 // ─── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("dashboard");
+  const [historico, setHistorico] = useState(MOCK_HISTORICO);
   const [dia, setDia] = useState({
     id: "hoje",
     date: today(),
-    materiais: MOCK_MATERIAIS_HOJE,
+    materiais: [],
     finalizado: false,
   });
 
@@ -748,9 +887,29 @@ export default function App() {
     setDia(prev=>({...prev, materiais:[...prev.materiais, mat]}));
   }
 
+  function handleEditMaterial(mat) {
+    setDia(prev=>({...prev, materiais: prev.materiais.map(m=> m.id===mat.id ? mat : m)}));
+  }
+
+  function handleRemoveMaterial(id) {
+    setDia(prev=>({...prev, materiais: prev.materiais.filter(m=> m.id!==id)}));
+  }
+
+  function handleLimparDashboard() {
+    setDia(prev=>({...prev, materiais: [], finalizado: false}));
+  }
+
   function handleFinalizarDia() {
-    setDia(prev=>({...prev, finalizado:true}));
-    MOCK_HISTORICO.unshift({...dia, finalizado:true});
+    // Save current day to history
+    const diaFinalizado = {...dia, finalizado: true};
+    setHistorico(prev=>[diaFinalizado, ...prev]);
+    // Reset dashboard to a fresh new day
+    setDia({
+      id: crypto.randomUUID(),
+      date: today(),
+      materiais: [],
+      finalizado: false,
+    });
   }
 
   const NAV = [
@@ -801,10 +960,13 @@ export default function App() {
             onFinalizarDia={handleFinalizarDia}
             onAddMaterial={handleAddMaterial}
             onUpdateCell={handleUpdateCell}
+            onEditMaterial={handleEditMaterial}
+            onRemoveMaterial={handleRemoveMaterial}
+            onLimparDashboard={handleLimparDashboard}
           />
         )}
-        {page==="indicadores" && <IndicadoresPage diaAtual={dia} />}
-        {page==="historico" && <HistoricoPage />}
+        {page==="indicadores" && <IndicadoresPage diaAtual={dia} historico={historico} />}
+        {page==="historico" && <HistoricoPage historico={historico} />}
       </main>
     </div>
   );
