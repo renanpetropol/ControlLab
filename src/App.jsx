@@ -18,6 +18,7 @@ const ENSAIOS_DEFAULT = [
   { id: "izod_s_astm",   label: "Izod s/ Entalhe - ASTM" },
 ];
 
+const RESINAS = ["PA6", "PA66", "PBT", "PP", "ABS", "PC", "POM", "PEEK", "PPS"];
 
 function makeCell(status = "pendente", operador = null, hora = null) {
   return { status, operador, hora };
