@@ -1,60 +1,83 @@
 # LabQuality — Sistema de Controle de Validações
 
-Dashboard web para controle diário de ensaios laboratoriais em compostos plásticos.
+## Pré-requisitos
+- Node.js 18+
+- Conta gratuita no [Supabase](https://supabase.com)
 
-## Funcionalidades
+---
 
-- **Dashboard diário** — grade de materiais × ensaios com status visual (pendente / em andamento / concluído)
-- **Indicadores** — ranking de ensaios mais realizados com filtros de período
-- **Histórico** — consulta de dashboards anteriores por data ou código de material
-- **Cadastro de materiais** — código, resina, ensaios aplicáveis
-- **Finalizar dia** — salva o dashboard no histórico e abre um novo dia
+## 1. Configurar o Supabase
 
-## Tecnologias
+### 1.1 Criar projeto
+1. Acesse https://supabase.com e faça login
+2. Clique em **"New project"**
+3. Dê um nome (ex: `labquality`), escolha uma senha e selecione a região mais próxima (**South America - São Paulo**)
+4. Aguarde o projeto iniciar (~2 min)
 
-- React 18 + Vite
-- TailwindCSS (via inline styles — sem dependência extra)
-- Dados mockados em memória (pronto para integrar com API)
+### 1.2 Criar as tabelas
+1. No menu lateral, clique em **SQL Editor**
+2. Clique em **"New query"**
+3. Cole todo o conteúdo do arquivo `supabase_setup.sql`
+4. Clique em **"Run"** (▶)
+5. Deve aparecer "Success" para cada comando
 
-## Como rodar localmente
+### 1.3 Pegar as credenciais
+1. No menu lateral, vá em **Settings → API**
+2. Copie:
+   - **Project URL** → ex: `https://abcdefgh.supabase.co`
+   - **anon / public key** → chave longa começando com `eyJ...`
 
+---
+
+## 2. Configurar o projeto local
+
+### 2.1 Criar arquivo .env
+Na raiz do projeto, crie um arquivo chamado `.env`:
+```
+VITE_SUPABASE_URL=https://SEU_PROJETO.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### 2.2 Instalar dependências e rodar
 ```bash
 npm install
 npm run dev
 ```
-
 Acesse http://localhost:5173
 
-## Como fazer build para produção
+---
 
+## 3. Deploy na Vercel
+
+### 3.1 Subir para o GitHub
 ```bash
-npm run build
+git init
+git add .
+git commit -m "LabQuality v2 com Supabase"
+# Crie um repositório em github.com e siga as instruções para push
 ```
 
-Os arquivos estáticos estarão na pasta `dist/`. Pode ser hospedado em:
-- **Vercel**: `vercel --prod` ou conecte o repositório no dashboard
-- **Netlify**: arraste a pasta `dist/` ou conecte via Git
-- **GitHub Pages**: use o plugin `vite-plugin-gh-pages`
+### 3.2 Conectar na Vercel
+1. Acesse https://vercel.com e faça login com GitHub
+2. Clique em **"New Project"** e selecione o repositório
+3. Em **"Environment Variables"**, adicione:
+   - `VITE_SUPABASE_URL` = sua URL do Supabase
+   - `VITE_SUPABASE_ANON_KEY` = sua chave anon
+4. Clique em **Deploy**
 
-## Estrutura
+Pronto! Sua URL pública estará disponível em segundos.
+
+---
+
+## Estrutura do banco de dados
 
 ```
-labquality/
-├── index.html
-├── vite.config.js
-├── package.json
-├── public/
-│   └── favicon.svg
-└── src/
-    ├── main.jsx       # entry point React
-    ├── index.css      # reset global
-    └── App.jsx        # aplicação completa
+dias          → cada dia de trabalho (date, finalizado)
+ └── materiais → materiais do dia (codigo, resina)
+      └── ensaios → células da grade (ensaio_id, status, operador, hora)
 ```
 
-## Próximos passos sugeridos
-
-- [ ] Integração com banco de dados (Supabase, Firebase ou API própria)
-- [ ] Sistema de login por usuário
-- [ ] Exportação de PDF do dashboard do dia
-- [ ] Relatórios e KPIs mensais
-- [ ] Notificações de ensaios pendentes no final do turno
+## Tecnologias
+- React 18 + Vite
+- Supabase (PostgreSQL)
+- Deploy: Vercel
