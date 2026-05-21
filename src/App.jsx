@@ -781,21 +781,175 @@ function IndicadoresPage({ diaAtual, historico }) {
   );
 }
 
+const ALLOWED_DOMAIN = "petropol.com.br";
+
+// ─── AuthPage ─────────────────────────────────────────────────────────────────
+function AuthPage({ onAuth }) {
+  const [mode, setMode]         = useState("login"); // login | cadastro | confirmado
+  const [nome, setNome]         = useState("");
+  const [email, setEmail]       = useState("");
+  const [senha, setSenha]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [erro, setErro]         = useState("");
+
+  function validarEmail(e) {
+    if (!e.endsWith(`@${ALLOWED_DOMAIN}`))
+      return `Apenas e-mails @${ALLOWED_DOMAIN} são permitidos.`;
+    return "";
+  }
+
+  async function handleLogin() {
+    setErro("");
+    const erroEmail = validarEmail(email);
+    if (erroEmail) { setErro(erroEmail); return; }
+    if (!senha) { setErro("Informe a senha."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+    setLoading(false);
+    if (error) {
+      if (error.message.includes("Invalid login")) setErro("E-mail ou senha incorretos.");
+      else if (error.message.includes("Email not confirmed")) setErro("Confirme seu e-mail antes de entrar.");
+      else setErro(error.message);
+    }
+    // onAuth será chamado automaticamente pelo listener de sessão no App
+  }
+
+  async function handleCadastro() {
+    setErro("");
+    if (!nome.trim()) { setErro("Informe seu nome."); return; }
+    const erroEmail = validarEmail(email);
+    if (erroEmail) { setErro(erroEmail); return; }
+    if (senha.length < 6) { setErro("A senha deve ter ao menos 6 caracteres."); return; }
+    setLoading(true);
+    const { error } = await supabase.auth.signUp({
+      email, password: senha,
+      options: { data: { nome_completo: nome.trim() } },
+    });
+    setLoading(false);
+    if (error) { setErro(error.message); return; }
+    setMode("confirmado");
+  }
+
+  if (mode === "confirmado") return (
+    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"2.5rem",width:"min(420px,92vw)",textAlign:"center",boxShadow:"0 20px 60px rgba(0,0,0,.1)"}}>
+        <div style={{width:56,height:56,borderRadius:28,background:"#d4f5e0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 1.25rem"}}>✉️</div>
+        <h2 style={{margin:"0 0 .75rem",fontSize:20,fontWeight:800,color:"#1a1a18"}}>Confirme seu e-mail</h2>
+        <p style={{color:"#666",fontSize:14,lineHeight:1.7,margin:"0 0 1.5rem"}}>
+          Enviamos um link de confirmação para<br/>
+          <strong style={{color:"#1a3a2a"}}>{email}</strong><br/>
+          Acesse seu e-mail e clique no link para ativar sua conta.
+        </p>
+        <button onClick={()=>setMode("login")} style={{padding:"10px 24px",borderRadius:9,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#666"}}>
+          Voltar ao login
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"2.5rem",width:"min(420px,92vw)",boxShadow:"0 20px 60px rgba(0,0,0,.1)"}}>
+
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:"2rem"}}>
+          <div style={{fontSize:28,fontWeight:900,color:"#1a3a2a",letterSpacing:"-.02em",marginBottom:4}}>
+            <span style={{color:"#2eaa5f"}}>Lab</span>Quality
+          </div>
+          <div style={{fontSize:12,color:"#aaa",letterSpacing:".06em",textTransform:"uppercase"}}>Controle de Validações · Petropol</div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",background:"#f0eeea",borderRadius:10,padding:4,marginBottom:"1.5rem"}}>
+          {[{id:"login",label:"Entrar"},{id:"cadastro",label:"Cadastrar"}].map(t=>(
+            <button key={t.id} onClick={()=>{setMode(t.id);setErro("");}} style={{flex:1,padding:"8px",borderRadius:7,border:"none",background:mode===t.id?"#1a3a2a":"transparent",color:mode===t.id?"#7bc99a":"#888",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .15s"}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Campos */}
+        <div style={{display:"grid",gap:12}}>
+          {mode==="cadastro" && (
+            <div>
+              <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome completo</label>
+              <input value={nome} onChange={e=>setNome(e.target.value)} placeholder="ex: Ana Paula Silva"
+                style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
+                onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"} />
+            </div>
+          )}
+          <div>
+            <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>E-mail corporativo</label>
+            <input value={email} onChange={e=>setEmail(e.target.value)} placeholder={`nome@${ALLOWED_DOMAIN}`} type="email"
+              style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
+              onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"} />
+          </div>
+          <div>
+            <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Senha</label>
+            <input value={senha} onChange={e=>setSenha(e.target.value)} type="password"
+              placeholder={mode==="cadastro"?"Mínimo 6 caracteres":"Sua senha"}
+              style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
+              onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"}
+              onKeyDown={e=>e.key==="Enter"&&(mode==="login"?handleLogin():handleCadastro())} />
+          </div>
+        </div>
+
+        {/* Erro */}
+        {erro && (
+          <div style={{marginTop:12,background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#dc2626"}}>
+            {erro}
+          </div>
+        )}
+
+        {/* Botão */}
+        <button
+          onClick={mode==="login"?handleLogin:handleCadastro}
+          disabled={loading}
+          style={{width:"100%",marginTop:20,padding:"12px",borderRadius:9,border:"none",background:loading?"#ccc":"#1a3a2a",color:"#fff",cursor:loading?"default":"pointer",fontSize:14,fontWeight:700,transition:"background .15s"}}>
+          {loading ? "Aguarde..." : mode==="login" ? "Entrar" : "Criar conta"}
+        </button>
+
+        <p style={{textAlign:"center",fontSize:12,color:"#bbb",marginTop:"1.25rem",marginBottom:0}}>
+          Acesso restrito a <strong>@{ALLOWED_DOMAIN}</strong>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage]         = useState("dashboard");
-  const [dia, setDia]           = useState(null);
+  const [page, setPage]           = useState("dashboard");
+  const [session, setSession]     = useState(undefined); // undefined=carregando, null=sem auth
+  const [dia, setDia]             = useState(null);
   const [historico, setHistorico] = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [toast, setToast]       = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [toast, setToast]         = useState(null);
+
+  // Primeiro nome do usuário logado
+  const primeiroNome = session?.user?.user_metadata?.nome_completo?.split(" ")[0]
+    || session?.user?.email?.split("@")[0]
+    || "";
 
   function showToast(msg, type="success") {
     setToast({msg, type});
-    setTimeout(()=>setToast(null), 3000);
+    setTimeout(()=>setToast(null), 3500);
   }
 
-  // Carrega dados iniciais
+  // Listener de sessão — roda uma vez, escuta mudanças de auth
   useEffect(()=>{
+    supabase.auth.getSession().then(({ data: { session } })=>{
+      setSession(session ?? null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session)=>{
+      setSession(session ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Carrega dados quando há sessão ativa
+  useEffect(()=>{
+    if (!session) { setLoading(false); return; }
     async function init() {
       try {
         setLoading(true);
@@ -813,7 +967,7 @@ export default function App() {
       }
     }
     init();
-  }, []);
+  }, [session]);
 
   async function handleUpdateCell(matId, ensaioId, data) {
     // Atualiza UI imediatamente (otimista)
@@ -889,6 +1043,18 @@ export default function App() {
 
   const progress = dia ? calcProgress(dia.materiais) : {pct:0};
 
+  // session === undefined → ainda verificando auth (splash)
+  // session === null     → sem login → mostra AuthPage
+  // session === object   → logado → mostra app
+  if (session === undefined) return (
+    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{fontSize:32}}>🧪</div>
+      <div style={{fontSize:16,fontWeight:600,color:"#1a3a2a"}}>Carregando LabQuality...</div>
+    </div>
+  );
+
+  if (session === null) return <AuthPage />;
+
   if (loading) return (
     <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
       <div style={{fontSize:32}}>🧪</div>
@@ -924,6 +1090,23 @@ export default function App() {
           )}
           <div style={{fontSize:12,color:"#7bc99a"}}>{fmtDate(today())}</div>
           {dia?.finalizado&&<span style={{background:"rgba(123,201,154,.2)",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>DIA FINALIZADO</span>}
+          <div style={{width:1,height:20,background:"#2d5c42"}} />
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:28,height:28,borderRadius:14,background:"rgba(123,201,154,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#7bc99a"}}>
+                {primeiroNome.slice(0,2).toUpperCase()}
+              </div>
+              <span style={{fontSize:13,color:"#7bc99a",fontWeight:600}}>{primeiroNome}</span>
+            </div>
+            <button
+              onClick={()=>supabase.auth.signOut()}
+              title="Sair"
+              style={{padding:"5px 12px",borderRadius:7,border:"1px solid rgba(123,201,154,.3)",background:"transparent",color:"#7bc99a",cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.background="rgba(123,201,154,.15)";}}
+              onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
+              Sair
+            </button>
+          </div>
         </div>
       </div>
 
