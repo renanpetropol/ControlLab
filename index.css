@@ -1,0 +1,4 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #f5f3ef; }
+input, select, textarea, button { font-family: inherit; }
+input[type="time"]::-webkit-calendar-picker-indicator { opacity: 0.5; cursor: pointer; }
