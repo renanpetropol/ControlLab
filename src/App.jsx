@@ -139,9 +139,7 @@ function CellModal({ cell, ensaio, material, onClose, onSave }) {
 
 function AddMaterialModal({ onClose, onAdd }) {
   const [codigo, setCodigo] = useState("");
-  const [nome, setNome] = useState("");
-  const [resina, setResina] = useState("PA6");
-  const [obs, setObs] = useState("");
+  const [resina, setResina] = useState("");
   const [aplicavel, setAplicavel] = useState(["injecao","fusao","densidade","tracao","flexao","charpy_c","izod_c"]);
 
   function toggleEnsaio(id) {
@@ -154,7 +152,7 @@ function AddMaterialModal({ onClose, onAdd }) {
     ENSAIOS_DEFAULT.forEach(e=>{
       cells[e.id] = aplicavel.includes(e.id) ? makeCell("pendente") : {status:"na"};
     });
-    onAdd({ id:crypto.randomUUID(), codigo:codigo.trim(), nome:nome.trim()||codigo.trim(), resina, obs, cells });
+    onAdd({ id:crypto.randomUUID(), codigo:codigo.trim(), nome:codigo.trim(), resina:resina.trim(), obs:"", cells });
     onClose();
   }
 
@@ -163,25 +161,15 @@ function AddMaterialModal({ onClose, onAdd }) {
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.75rem",width:"min(520px,100%)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
         <h3 style={{margin:"0 0 1.25rem",fontSize:18,fontWeight:700,color:"#1a1a18"}}>Cadastrar Material</h3>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1rem"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1.25rem"}}>
           <div>
             <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
             <input value={codigo} onChange={e=>setCodigo(e.target.value)} placeholder="ex: 100.0842" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
           </div>
           <div>
             <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
-            <select value={resina} onChange={e=>setResina(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}>
-              {RESINAS.map(r=><option key={r}>{r}</option>)}
-            </select>
+            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
           </div>
-        </div>
-        <div style={{marginBottom:"0.75rem"}}>
-          <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome / Descrição</label>
-          <input value={nome} onChange={e=>setNome(e.target.value)} placeholder="ex: PA66 G30 com fibra" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
-        </div>
-        <div style={{marginBottom:"1.25rem"}}>
-          <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Observações</label>
-          <textarea value={obs} onChange={e=>setObs(e.target.value)} rows={2} placeholder="Observações opcionais..." style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box",resize:"vertical"}} />
         </div>
 
         <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>Ensaios aplicáveis</p>
@@ -206,7 +194,6 @@ function AddMaterialModal({ onClose, onAdd }) {
 // ─── Edit Material Modal ──────────────────────────────────────────────────────
 function EditMaterialModal({ material, onClose, onSave, onRemove }) {
   const [codigo, setCodigo] = useState(material.codigo);
-  const [nome, setNome]     = useState(material.nome);
   const [resina, setResina] = useState(material.resina);
   const [aplicavel, setAplicavel] = useState(
     ENSAIOS_DEFAULT.filter(e => material.cells[e.id]?.status !== "na").map(e => e.id)
@@ -219,18 +206,16 @@ function EditMaterialModal({ material, onClose, onSave, onRemove }) {
 
   function save() {
     if (!codigo.trim()) return;
-    // rebuild cells: keep existing data for applied, mark na for removed
     const newCells = {};
     ENSAIOS_DEFAULT.forEach(e => {
       if (!aplicavel.includes(e.id)) {
         newCells[e.id] = { status: "na" };
       } else {
-        // keep existing cell data if was already applied, else start pendente
         const existing = material.cells[e.id];
         newCells[e.id] = (existing && existing.status !== "na") ? existing : makeCell("pendente");
       }
     });
-    onSave({ ...material, codigo: codigo.trim(), nome: nome.trim() || codigo.trim(), resina, cells: newCells });
+    onSave({ ...material, codigo: codigo.trim(), nome: codigo.trim(), resina: resina.trim(), cells: newCells });
     onClose();
   }
 
@@ -242,21 +227,15 @@ function EditMaterialModal({ material, onClose, onSave, onRemove }) {
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#aaa",lineHeight:1}}>×</button>
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1rem"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1.25rem"}}>
           <div>
             <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
             <input value={codigo} onChange={e=>setCodigo(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
           </div>
           <div>
             <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
-            <select value={resina} onChange={e=>setResina(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}>
-              {RESINAS.map(r=><option key={r}>{r}</option>)}
-            </select>
+            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
           </div>
-        </div>
-        <div style={{marginBottom:"1.25rem"}}>
-          <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome / Descrição</label>
-          <input value={nome} onChange={e=>setNome(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
         </div>
 
         <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>Ensaios aplicáveis</p>
@@ -431,7 +410,7 @@ function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell, onEdi
             <h1 style={{margin:0,fontSize:26,fontWeight:800,color:"#1a1a18",letterSpacing:"-.02em"}}>Dashboard Diário</h1>
             {dia.finalizado && <span style={{background:"#1a3a2a",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,letterSpacing:".06em"}}>FINALIZADO</span>}
           </div>
-          <p style={{margin:"4px 0 0",fontSize:15,color:"#888"}}>{fmtDate(dia.date)} — {dia.materiais.length} material{dia.materiais.length!==1?"is":""}</p>
+          <p style={{margin:"4px 0 0",fontSize:15,color:"#888"}}>{fmtDate(dia.date)} — {dia.materiais.length} {dia.materiais.length===1?"material":"materiais"}</p>
         </div>
         {!dia.finalizado && (
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
