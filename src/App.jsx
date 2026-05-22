@@ -676,63 +676,6 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
   );
 }
 
-  return (
-    <div>
-      <h1 style={{margin:"0 0 1.5rem",fontSize:26,fontWeight:800,color:"#1a1a18",letterSpacing:"-.02em"}}>Histórico</h1>
-      <div style={{display:"flex",gap:10,marginBottom:"1.25rem",flexWrap:"wrap"}}>
-        <input type="date" value={busca} onChange={e=>setBusca(e.target.value)} style={{border:"1px solid #e0ddd6",borderRadius:9,padding:"9px 12px",fontSize:13,background:"#fff"}} />
-        <input value={buscaMat} onChange={e=>setBuscaMat(e.target.value)} placeholder="Buscar por código ou resina..." style={{flex:1,minWidth:200,border:"1px solid #e0ddd6",borderRadius:9,padding:"9px 12px",fontSize:13}} />
-        {(busca||buscaMat)&&<button onClick={()=>{setBusca("");setBuscaMat("");}} style={{padding:"9px 14px",borderRadius:9,border:"1px solid #e0ddd6",background:"#f7f5f2",cursor:"pointer",fontSize:13,color:"#888"}}>✕ Limpar</button>}
-      </div>
-      {selecionado ? (
-        <div>
-          <button onClick={()=>setSelecionado(null)} style={{display:"flex",alignItems:"center",gap:6,marginBottom:"1rem",padding:"7px 14px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#444"}}>← Voltar</button>
-          <div style={{marginBottom:"1rem"}}>
-            <h2 style={{margin:"0 0 4px",fontSize:18,fontWeight:700}}>{fmtDate(selecionado.date)}</h2>
-            <p style={{margin:0,color:"#888",fontSize:13}}>{selecionado.materiais.length} materiais — {calcProgress(selecionado.materiais).pct}% concluído</p>
-          </div>
-          <StatsBar progress={calcProgress(selecionado.materiais)} />
-          <DashboardGrid materiais={selecionado.materiais} onUpdateCell={()=>{}} onEditMaterial={()=>{}} readonly={true} />
-        </div>
-      ) : loading ? (
-        <div style={{textAlign:"center",padding:"3rem",color:"#aaa"}}>Carregando histórico...</div>
-      ) : (
-        <div>
-          <p style={{fontSize:13,color:"#aaa",margin:"0 0 12px"}}>{filtrado.length} registro{filtrado.length!==1?"s":""}</p>
-          <div style={{display:"grid",gap:8}}>
-            {filtrado.map(h => {
-              const prog = calcProgress(h.materiais);
-              return (
-                <div key={h.id} onClick={()=>setSelecionado(h)}
-                  style={{background:"#fff",borderRadius:12,border:"1px solid #e8e5de",padding:"14px 18px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,transition:"box-shadow .15s,border-color .15s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.borderColor="#1a3a2a";e.currentTarget.style.boxShadow="0 4px 16px rgba(26,58,42,.08)";}}
-                  onMouseLeave={e=>{e.currentTarget.style.borderColor="#e8e5de";e.currentTarget.style.boxShadow="none";}}>
-                  <div>
-                    <div style={{fontWeight:700,fontSize:15,color:"#1a1a18"}}>{fmtDate(h.date)}</div>
-                    <div style={{fontSize:12,color:"#888",marginTop:2}}>{h.materiais.length} materiais — {h.materiais.map(m=>m.resina).filter((v,i,a)=>a.indexOf(v)===i&&v).join(", ")}</div>
-                  </div>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{textAlign:"right"}}>
-                      <div style={{fontSize:18,fontWeight:800,color:prog.pct>=100?"#2eaa5f":prog.pct>=60?"#f0b429":"#888"}}>{prog.pct}%</div>
-                      <div style={{fontSize:10,color:"#aaa",textTransform:"uppercase",letterSpacing:".05em"}}>Concluído</div>
-                    </div>
-                    <div style={{width:48,height:48,borderRadius:24,background:"#f0eeea",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                      <div style={{width:36,height:36,borderRadius:18,background:`conic-gradient(#2eaa5f ${prog.pct}%, #e8e5de ${prog.pct}%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                        <div style={{width:24,height:24,borderRadius:12,background:"#fff"}} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {filtrado.length===0&&<div style={{textAlign:"center",padding:"3rem",color:"#aaa"}}>Nenhum registro encontrado.</div>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── IndicadoresPage ──────────────────────────────────────────────────────────
 function IndicadoresPage({ diaAtual, historico }) {
   const [filtro, setFiltro] = useState("mes");
