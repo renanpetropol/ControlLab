@@ -81,3 +81,25 @@ dias          → cada dia de trabalho (date, finalizado)
 - React 18 + Vite
 - Supabase (PostgreSQL)
 - Deploy: Vercel
+
+---
+
+## 4. Configurar autenticação (login)
+
+### 4.1 Ativar confirmação de e-mail
+1. No Supabase, vá em **Authentication → Providers → Email**
+2. Confirme que **"Confirm email"** está **ON**
+3. Vá em **Authentication → Email Templates** para personalizar o e-mail se quiser
+
+### 4.2 Restringir domínio
+O sistema já bloqueia qualquer e-mail que não seja `@petropol.com.br` diretamente no frontend.
+
+### 4.3 Sessão persistente
+A sessão é salva no `localStorage` pelo Supabase automaticamente. O usuário permanece logado mesmo após fechar o navegador, sem timeout por inatividade.
+
+### 4.4 Fluxo do usuário
+1. Acessa o sistema → vê tela de login
+2. Clica em "Cadastrar", preenche nome + e-mail `@petropol.com.br` + senha
+3. Recebe e-mail de confirmação → clica no link
+4. Faz login → fica logado permanentemente
+5. Botão "Sair" no header para desconectar manualmente

@@ -19,6 +19,12 @@ const ENSAIOS_DEFAULT = [
   { id: "izod_s_astm", label: "Izod s/ Entalhe - ASTM" },
 ];
 
+const TURNOS = [
+  { id: 1, label: "1º Turno", inicio: "06:00", fim: "15:48", color: "#185fa5", bg: "#e6f1fb", dot: "#378add" },
+  { id: 2, label: "2º Turno", inicio: "13:00", fim: "22:42", color: "#7b4fa6", bg: "#ede9fb", dot: "#9b6fd4" },
+  { id: 3, label: "3º Turno", inicio: "22:00", fim: "06:20", color: "#1a6b3a", bg: "#d4f5e0", dot: "#2eaa5f" },
+];
+
 const STATUS_CONFIG = {
   pendente:  { bg:"#E8E8E4", txt:"#555550", label:"Pendente",     dot:"#AAAAAA" },
   andamento: { bg:"#FFF3C4", txt:"#8A6800", label:"Em Andamento", dot:"#F0B429" },
@@ -26,15 +32,34 @@ const STATUS_CONFIG = {
   na:        { bg:"transparent", txt:"transparent", label:"N/A",  dot:"transparent" },
 };
 
-function makeCell(status = "pendente", operador = null, hora = null) {
-  return { status, operador, hora };
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function makeCell(status="pendente", operador=null, hora=null) { return {status,operador,hora}; }
 function today() { return new Date().toISOString().split("T")[0]; }
-function fmtDate(d) { const [y,m,dd] = d.split("-"); return `${dd}/${m}/${y}`; }
+function fmtDate(d) { if(!d) return ""; const [y,m,dd]=d.split("-"); return `${dd}/${m}/${y}`; }
+
+function getTurnoAtual(turnosFinalizados=[]) {
+  const now = new Date();
+  const h = now.getHours(), min = now.getMinutes();
+  const mins = h*60+min;
+  // 1º turno: 06:00–13:00 (antes do 2º começar)
+  // 2º turno: 13:00–22:00
+  // 3º turno: 22:00–06:00
+  let candidato;
+  if (mins >= 6*60 && mins < 13*60) candidato = 1;
+  else if (mins >= 13*60 && mins < 22*60) candidato = 2;
+  else candidato = 3;
+
+  // Avança se o turno candidato já foi finalizado
+  for (let i = 0; i < 3; i++) {
+    if (!turnosFinalizados.includes(candidato)) return candidato;
+    candidato = candidato === 3 ? 1 : candidato + 1;
+  }
+  return null; // todos finalizados
+}
 
 function calcProgress(materiais) {
   let total=0, done=0, wip=0;
-  materiais.forEach(m => ENSAIOS_DEFAULT.forEach(e => {
+  (materiais||[]).forEach(m => ENSAIOS_DEFAULT.forEach(e => {
     const c = m.cells[e.id];
     if (!c || c.status==="na") return;
     total++; if (c.status==="concluido") done++; if (c.status==="andamento") wip++;
@@ -43,140 +68,135 @@ function calcProgress(materiais) {
 }
 
 // ─── Supabase helpers ──────────────────────────────────────────────────────────
-
-// Converte linhas do banco → estrutura usada pelo React
-function rowsToDia(diaRow, materiaisRows, ensaiosRows) {
-  const materiais = materiaisRows.map(m => {
+function rowsToDia(diaRow, materiaisRows, ensaiosRows, turnosRows, ocorrenciasRows) {
+  const materiais = (materiaisRows||[]).map(m => {
     const cells = {};
-    ENSAIOS_DEFAULT.forEach(e => { cells[e.id] = { status: "na" }; });
-    ensaiosRows.filter(en => en.material_id === m.id).forEach(en => {
-      cells[en.ensaio_id] = { status: en.status, operador: en.operador, hora: en.hora };
+    ENSAIOS_DEFAULT.forEach(e => { cells[e.id] = { status:"na" }; });
+    (ensaiosRows||[]).filter(en => en.material_id===m.id).forEach(en => {
+      cells[en.ensaio_id] = { status:en.status, operador:en.operador, hora:en.hora };
     });
-    return { id: m.id, codigo: m.codigo, nome: m.nome, resina: m.resina, cells };
+    return { id:m.id, codigo:m.codigo, nome:m.nome, resina:m.resina, cells };
   });
-  return { id: diaRow.id, date: diaRow.date, finalizado: diaRow.finalizado, materiais };
+  const turnos = (turnosRows||[]).filter(t => t.dia_id===diaRow.id);
+  const ocorrencias = (ocorrenciasRows||[]).filter(o => turnos.some(t => t.id===o.turno_id));
+  return {
+    id:diaRow.id, date:diaRow.date, finalizado:diaRow.finalizado, materiais,
+    turnos, ocorrencias,
+  };
 }
 
-// Busca ou cria o dia de hoje
-async function fetchOrCreateToday() {
-  const dateStr = today();
-  let { data: dia, error } = await supabase
-    .from("dias").select("*").eq("date", dateStr).single();
-
-  if (error && error.code === "PGRST116") {
-    // não existe ainda — cria
-    const { data: novoDia, error: errCria } = await supabase
-      .from("dias").insert({ date: dateStr, finalizado: false }).select().single();
-    if (errCria) throw errCria;
-    dia = novoDia;
+async function fetchDiaByDate(dateStr) {
+  let { data:dia, error } = await supabase.from("dias").select("*").eq("date", dateStr).single();
+  if (error && error.code==="PGRST116") {
+    const { data:novo, error:e2 } = await supabase.from("dias").insert({date:dateStr,finalizado:false}).select().single();
+    if (e2) throw e2;
+    dia = novo;
   } else if (error) throw error;
 
-  const { data: materiais } = await supabase
-    .from("materiais").select("*").eq("dia_id", dia.id).order("ordem");
-  const matIds = (materiais||[]).map(m => m.id);
-  const { data: ensaios } = matIds.length
-    ? await supabase.from("ensaios").select("*").in("material_id", matIds)
-    : { data: [] };
+  const { data:materiais } = await supabase.from("materiais").select("*").eq("dia_id",dia.id).order("ordem");
+  const matIds = (materiais||[]).map(m=>m.id);
+  const { data:ensaios } = matIds.length ? await supabase.from("ensaios").select("*").in("material_id",matIds) : {data:[]};
+  const { data:turnos } = await supabase.from("turnos").select("*").eq("dia_id",dia.id).order("numero");
+  const turnoIds = (turnos||[]).map(t=>t.id);
+  const { data:ocorrencias } = turnoIds.length ? await supabase.from("ocorrencias").select("*").in("turno_id",turnoIds).order("created_at") : {data:[]};
 
-  return rowsToDia(dia, materiais||[], ensaios||[]);
+  return rowsToDia(dia, materiais||[], ensaios||[], turnos||[], ocorrencias||[]);
 }
 
-// Busca todos os dias finalizados para o histórico
 async function fetchHistorico() {
-  const { data: dias, error } = await supabase
-    .from("dias").select("*").eq("finalizado", true).order("date", { ascending: false });
+  const { data:dias, error } = await supabase.from("dias").select("*").eq("finalizado",true).order("date",{ascending:false});
   if (error) throw error;
-  if (!dias || dias.length === 0) return [];
+  if (!dias||!dias.length) return [];
 
-  const diaIds = dias.map(d => d.id);
-  const { data: materiais } = await supabase
-    .from("materiais").select("*").in("dia_id", diaIds).order("ordem");
-  const matIds = (materiais||[]).map(m => m.id);
-  const { data: ensaios } = matIds.length
-    ? await supabase.from("ensaios").select("*").in("material_id", matIds)
-    : { data: [] };
+  const diaIds = dias.map(d=>d.id);
+  const { data:materiais } = await supabase.from("materiais").select("*").in("dia_id",diaIds).order("ordem");
+  const matIds = (materiais||[]).map(m=>m.id);
+  const { data:ensaios } = matIds.length ? await supabase.from("ensaios").select("*").in("material_id",matIds) : {data:[]};
+  const { data:turnos } = await supabase.from("turnos").select("*").in("dia_id",diaIds).order("numero");
+  const turnoIds = (turnos||[]).map(t=>t.id);
+  const { data:ocorrencias } = turnoIds.length ? await supabase.from("ocorrencias").select("*").in("turno_id",turnoIds).order("created_at") : {data:[]};
 
   return dias.map(d => {
-    const mats = (materiais||[]).filter(m => m.dia_id === d.id);
-    return rowsToDia(d, mats, ensaios||[]);
+    const mats = (materiais||[]).filter(m=>m.dia_id===d.id);
+    return rowsToDia(d, mats, ensaios||[], turnos||[], ocorrencias||[]);
   });
 }
 
-// Adiciona material + ensaios no banco
 async function dbAddMaterial(diaId, mat, ordem) {
-  const { data: matRow, error } = await supabase
-    .from("materiais")
-    .insert({ dia_id: diaId, codigo: mat.codigo, nome: mat.nome, resina: mat.resina, ordem })
+  const { data:matRow, error } = await supabase.from("materiais")
+    .insert({dia_id:diaId, codigo:mat.codigo, nome:mat.nome, resina:mat.resina, ordem}).select().single();
+  if (error) throw error;
+  const ins = ENSAIOS_DEFAULT.map(e => ({material_id:matRow.id, ensaio_id:e.id, status:mat.cells[e.id]?.status||"na", operador:null, hora:null}));
+  const { error:e2 } = await supabase.from("ensaios").insert(ins);
+  if (e2) throw e2;
+  return {...mat, id:matRow.id};
+}
+
+async function dbUpdateCell(materialId, ensaioId, data) {
+  const { error } = await supabase.from("ensaios")
+    .update({status:data.status, operador:data.operador, hora:data.hora, updated_at:new Date().toISOString()})
+    .eq("material_id",materialId).eq("ensaio_id",ensaioId);
+  if (error) throw error;
+}
+
+async function dbEditMaterial(mat) {
+  const { error } = await supabase.from("materiais").update({codigo:mat.codigo, nome:mat.nome, resina:mat.resina}).eq("id",mat.id);
+  if (error) throw error;
+  const updates = ENSAIOS_DEFAULT.map(e => ({material_id:mat.id, ensaio_id:e.id, status:mat.cells[e.id]?.status||"na", operador:mat.cells[e.id]?.operador||null, hora:mat.cells[e.id]?.hora||null, updated_at:new Date().toISOString()}));
+  const { error:e2 } = await supabase.from("ensaios").upsert(updates,{onConflict:"material_id,ensaio_id"});
+  if (e2) throw e2;
+}
+
+async function dbRemoveMaterial(materialId) {
+  const { error } = await supabase.from("materiais").delete().eq("id",materialId);
+  if (error) throw error;
+}
+
+async function dbLimparDia(diaId) {
+  const { error } = await supabase.from("materiais").delete().eq("dia_id",diaId);
+  if (error) throw error;
+}
+
+async function dbFinalizarTurno(diaId, numTurno, textoLivre, itens) {
+  // Upsert turno
+  const { data:turno, error } = await supabase.from("turnos")
+    .upsert({dia_id:diaId, numero:numTurno, finalizado:true, finalizado_em:new Date().toISOString()}, {onConflict:"dia_id,numero"})
     .select().single();
   if (error) throw error;
-
-  const ensaiosInsert = ENSAIOS_DEFAULT.map(e => ({
-    material_id: matRow.id,
-    ensaio_id: e.id,
-    status: mat.cells[e.id]?.status || "na",
-    operador: null,
-    hora: null,
-  }));
-  const { error: errE } = await supabase.from("ensaios").insert(ensaiosInsert);
-  if (errE) throw errE;
-  return { ...mat, id: matRow.id };
+  // Salva texto livre
+  if (textoLivre.trim()) {
+    await supabase.from("ocorrencias").insert({turno_id:turno.id, tipo:"texto", conteudo:textoLivre.trim()});
+  }
+  // Salva itens
+  for (const item of itens) {
+    if (item.titulo.trim()) {
+      await supabase.from("ocorrencias").insert({turno_id:turno.id, tipo:"item", conteudo:item.titulo.trim(), descricao:item.descricao||""});
+    }
+  }
+  return turno;
 }
 
-// Atualiza uma célula (ensaio) no banco
-async function dbUpdateCell(materialId, ensaioId, data) {
-  const { error } = await supabase
-    .from("ensaios")
-    .update({ status: data.status, operador: data.operador, hora: data.hora, updated_at: new Date().toISOString() })
-    .eq("material_id", materialId).eq("ensaio_id", ensaioId);
+async function dbSalvarOcorrencia(turnoId, tipo, conteudo, descricao="") {
+  const { data, error } = await supabase.from("ocorrencias")
+    .insert({turno_id:turnoId, tipo, conteudo, descricao}).select().single();
   if (error) throw error;
+  return data;
 }
 
-// Edita material e reconstrói seus ensaios
-async function dbEditMaterial(mat) {
-  const { error } = await supabase
-    .from("materiais")
-    .update({ codigo: mat.codigo, nome: mat.nome, resina: mat.resina })
-    .eq("id", mat.id);
-  if (error) throw error;
-
-  // Atualiza cada célula
-  const updates = ENSAIOS_DEFAULT.map(e => ({
-    material_id: mat.id,
-    ensaio_id: e.id,
-    status: mat.cells[e.id]?.status || "na",
-    operador: mat.cells[e.id]?.operador || null,
-    hora: mat.cells[e.id]?.hora || null,
-    updated_at: new Date().toISOString(),
-  }));
-  const { error: errU } = await supabase
-    .from("ensaios").upsert(updates, { onConflict: "material_id,ensaio_id" });
-  if (errU) throw errU;
-}
-
-// Remove material (ensaios em cascade)
-async function dbRemoveMaterial(materialId) {
-  const { error } = await supabase.from("materiais").delete().eq("id", materialId);
-  if (error) throw error;
-}
-
-// Limpa todos os materiais do dia
-async function dbLimparDia(diaId) {
-  const { error } = await supabase.from("materiais").delete().eq("dia_id", diaId);
-  if (error) throw error;
-}
-
-// Finaliza o dia e cria novo
-async function dbFinalizarDia(diaId) {
-  const { error } = await supabase.from("dias").update({ finalizado: true }).eq("id", diaId);
-  if (error) throw error;
-  // Cria o dia seguinte (hoje, se ainda não existe)
-  return fetchOrCreateToday();
+async function dbGetOrCreateTurno(diaId, numTurno) {
+  let { data:t, error } = await supabase.from("turnos").select("*").eq("dia_id",diaId).eq("numero",numTurno).single();
+  if (error && error.code==="PGRST116") {
+    const { data:novo, error:e2 } = await supabase.from("turnos").insert({dia_id:diaId, numero:numTurno, finalizado:false}).select().single();
+    if (e2) throw e2;
+    t = novo;
+  } else if (error) throw error;
+  return t;
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 function Toast({ msg, type }) {
   return (
-    <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:type==="error"?"#dc2626":"#1a3a2a",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:13,fontWeight:600,boxShadow:"0 8px 24px rgba(0,0,0,.2)",maxWidth:320,animation:"fadeIn .2s ease"}}>
+    <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:type==="error"?"#dc2626":"#1a3a2a",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:13,fontWeight:600,boxShadow:"0 8px 24px rgba(0,0,0,.2)",maxWidth:340}}>
       {type==="error"?"❌ ":"✓ "}{msg}
     </div>
   );
@@ -188,30 +208,21 @@ function CellModal({ cell, ensaio, material, onClose, onSave }) {
   const [op, setOp] = useState(cell.operador||"");
   const [hora, setHora] = useState(cell.hora||"");
   const [customOp, setCustomOp] = useState(!OPERATORS.includes(cell.operador||""));
-
-  function save() {
-    onSave({ status, operador: op||null, hora: status==="concluido"?(hora||new Date().toTimeString().slice(0,5)):null });
-    onClose();
-  }
-
+  function save() { onSave({status, operador:op||null, hora:status==="concluido"?(hora||new Date().toTimeString().slice(0,5)):null}); onClose(); }
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",border:"1px solid #e0ddd6",borderRadius:16,padding:"1.5rem",width:360,boxShadow:"0 20px 60px rgba(0,0,0,.15)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.5rem",width:360,boxShadow:"0 20px 60px rgba(0,0,0,.15)"}}>
         <div style={{marginBottom:"1rem"}}>
           <p style={{fontSize:11,color:"#888",margin:0,textTransform:"uppercase",letterSpacing:".08em"}}>{material.codigo} — {material.resina}</p>
           <h3 style={{margin:"4px 0 0",fontSize:16,fontWeight:600,color:"#1a1a18"}}>{ensaio.label}</h3>
         </div>
         <p style={{fontSize:12,color:"#888",margin:"0 0 6px",fontWeight:500}}>Status</p>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:"1.25rem"}}>
-          {["pendente","andamento","concluido"].map(s=>{
-            const c=STATUS_CONFIG[s];
-            return (
-              <button key={s} onClick={()=>setStatus(s)} style={{padding:"8px 4px",borderRadius:8,border:status===s?"2px solid "+c.dot:"1.5px solid #e0ddd6",background:status===s?c.bg:"transparent",cursor:"pointer",fontSize:11,fontWeight:600,color:status===s?c.txt:"#888",transition:"all .15s"}}>
-                <div style={{width:8,height:8,borderRadius:4,background:c.dot,margin:"0 auto 4px"}} />
-                {c.label}
-              </button>
-            );
-          })}
+          {["pendente","andamento","concluido"].map(s=>{const c=STATUS_CONFIG[s];return(
+            <button key={s} onClick={()=>setStatus(s)} style={{padding:"8px 4px",borderRadius:8,border:status===s?"2px solid "+c.dot:"1.5px solid #e0ddd6",background:status===s?c.bg:"transparent",cursor:"pointer",fontSize:11,fontWeight:600,color:status===s?c.txt:"#888",transition:"all .15s"}}>
+              <div style={{width:8,height:8,borderRadius:4,background:c.dot,margin:"0 auto 4px"}} />{c.label}
+            </button>
+          );})}
         </div>
         <p style={{fontSize:12,color:"#888",margin:"0 0 6px",fontWeight:500}}>Responsável</p>
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:"0.75rem"}}>
@@ -221,12 +232,10 @@ function CellModal({ cell, ensaio, material, onClose, onSave }) {
           <button onClick={()=>setCustomOp(true)} style={{padding:"4px 12px",borderRadius:20,border:customOp?"1.5px solid #378add":"1px solid #e0ddd6",background:customOp?"#e6f1fb":"transparent",fontSize:12,cursor:"pointer",color:customOp?"#185fa5":"#888"}}>+ Outro</button>
         </div>
         {customOp&&<input value={op} onChange={e=>setOp(e.target.value)} placeholder="Nome do operador" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"7px 10px",fontSize:13,marginBottom:"0.75rem",boxSizing:"border-box"}} />}
-        {status==="concluido"&&(
-          <>
-            <p style={{fontSize:12,color:"#888",margin:"0 0 6px",fontWeight:500}}>Horário de conclusão</p>
-            <input type="time" value={hora} onChange={e=>setHora(e.target.value)} style={{border:"1px solid #e0ddd6",borderRadius:8,padding:"7px 10px",fontSize:13,marginBottom:"1rem",width:140}} />
-          </>
-        )}
+        {status==="concluido"&&(<>
+          <p style={{fontSize:12,color:"#888",margin:"0 0 6px",fontWeight:500}}>Horário de conclusão</p>
+          <input type="time" value={hora} onChange={e=>setHora(e.target.value)} style={{border:"1px solid #e0ddd6",borderRadius:8,padding:"7px 10px",fontSize:13,marginBottom:"1rem",width:140}} />
+        </>)}
         <div style={{display:"flex",gap:8,marginTop:"1rem"}}>
           <button onClick={onClose} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
           <button onClick={save} style={{flex:2,padding:"9px",borderRadius:8,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:600}}>Salvar</button>
@@ -242,50 +251,34 @@ function AddMaterialModal({ onClose, onAdd }) {
   const [resina, setResina] = useState("");
   const [aplicavel, setAplicavel] = useState(["injecao","fusao","densidade","tracao","flexao","charpy_c","izod_c"]);
   const [saving, setSaving] = useState(false);
-
-  function toggleEnsaio(id) {
-    setAplicavel(p => p.includes(id)?p.filter(x=>x!==id):[...p,id]);
-  }
-
+  function toggle(id) { setAplicavel(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]); }
   async function add() {
-    if (!codigo.trim() || saving) return;
-    setSaving(true);
-    const cells = {};
-    ENSAIOS_DEFAULT.forEach(e => {
-      cells[e.id] = aplicavel.includes(e.id) ? makeCell("pendente") : { status:"na" };
-    });
-    await onAdd({ codigo:codigo.trim(), nome:codigo.trim(), resina:resina.trim(), cells });
-    onClose();
+    if (!codigo.trim()||saving) return; setSaving(true);
+    const cells={};
+    ENSAIOS_DEFAULT.forEach(e=>{cells[e.id]=aplicavel.includes(e.id)?makeCell("pendente"):{status:"na"};});
+    await onAdd({codigo:codigo.trim(), nome:codigo.trim(), resina:resina.trim(), cells}); onClose();
   }
-
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.75rem",width:"min(520px,100%)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
         <h3 style={{margin:"0 0 1.25rem",fontSize:18,fontWeight:700,color:"#1a1a18"}}>Cadastrar Material</h3>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1.25rem"}}>
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
-            <input value={codigo} onChange={e=>setCodigo(e.target.value)} placeholder="ex: 100.0842" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
-          </div>
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
-            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
-          </div>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
+            <input value={codigo} onChange={e=>setCodigo(e.target.value)} placeholder="ex: 100.0842" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} /></div>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
+            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} /></div>
         </div>
         <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>Ensaios aplicáveis</p>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:"1.5rem"}}>
           {ENSAIOS_DEFAULT.map(e=>(
             <label key={e.id} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:"#444",padding:"5px 8px",borderRadius:6,background:aplicavel.includes(e.id)?"#d4f5e0":"#f7f5f2",border:aplicavel.includes(e.id)?"1px solid #86d9a8":"1px solid transparent",transition:"all .12s"}}>
-              <input type="checkbox" checked={aplicavel.includes(e.id)} onChange={()=>toggleEnsaio(e.id)} style={{accentColor:"#2eaa5f"}} />
-              {e.label}
+              <input type="checkbox" checked={aplicavel.includes(e.id)} onChange={()=>toggle(e.id)} style={{accentColor:"#2eaa5f"}} />{e.label}
             </label>
           ))}
         </div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
-          <button onClick={add} disabled={!codigo.trim()||saving} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:codigo.trim()&&!saving?"#1a3a2a":"#ccc",color:"#fff",cursor:codigo.trim()&&!saving?"pointer":"default",fontSize:13,fontWeight:600}}>
-            {saving?"Salvando...":"Adicionar Material"}
-          </button>
+          <button onClick={add} disabled={!codigo.trim()||saving} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:codigo.trim()&&!saving?"#1a3a2a":"#ccc",color:"#fff",cursor:codigo.trim()&&!saving?"pointer":"default",fontSize:13,fontWeight:600}}>{saving?"Salvando...":"Adicionar Material"}</button>
         </div>
       </div>
     </div>
@@ -296,31 +289,19 @@ function AddMaterialModal({ onClose, onAdd }) {
 function EditMaterialModal({ material, onClose, onSave, onRemove }) {
   const [codigo, setCodigo] = useState(material.codigo);
   const [resina, setResina] = useState(material.resina||"");
-  const [aplicavel, setAplicavel] = useState(
-    ENSAIOS_DEFAULT.filter(e => material.cells[e.id]?.status !== "na").map(e => e.id)
-  );
+  const [aplicavel, setAplicavel] = useState(ENSAIOS_DEFAULT.filter(e=>material.cells[e.id]?.status!=="na").map(e=>e.id));
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  function toggleEnsaio(id) {
-    setAplicavel(p => p.includes(id) ? p.filter(x=>x!==id) : [...p,id]);
-  }
-
+  function toggle(id) { setAplicavel(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]); }
   async function save() {
-    if (!codigo.trim()||saving) return;
-    setSaving(true);
-    const newCells = {};
-    ENSAIOS_DEFAULT.forEach(e => {
-      if (!aplicavel.includes(e.id)) { newCells[e.id] = { status:"na" }; }
-      else {
-        const existing = material.cells[e.id];
-        newCells[e.id] = (existing && existing.status !== "na") ? existing : makeCell("pendente");
-      }
+    if (!codigo.trim()||saving) return; setSaving(true);
+    const newCells={};
+    ENSAIOS_DEFAULT.forEach(e=>{
+      if (!aplicavel.includes(e.id)) { newCells[e.id]={status:"na"}; }
+      else { const ex=material.cells[e.id]; newCells[e.id]=(ex&&ex.status!=="na")?ex:makeCell("pendente"); }
     });
-    await onSave({ ...material, codigo:codigo.trim(), nome:codigo.trim(), resina:resina.trim(), cells:newCells });
-    onClose();
+    await onSave({...material, codigo:codigo.trim(), nome:codigo.trim(), resina:resina.trim(), cells:newCells}); onClose();
   }
-
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.75rem",width:"min(520px,100%)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
@@ -329,47 +310,30 @@ function EditMaterialModal({ material, onClose, onSave, onRemove }) {
           <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#aaa",lineHeight:1}}>×</button>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:"1.25rem"}}>
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
-            <input value={codigo} onChange={e=>setCodigo(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
-          </div>
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
-            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} />
-          </div>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Código *</label>
+            <input value={codigo} onChange={e=>setCodigo(e.target.value)} style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} /></div>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Resina</label>
+            <input value={resina} onChange={e=>setResina(e.target.value)} placeholder="ex: PA66 G30" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}} /></div>
         </div>
         <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>Ensaios aplicáveis</p>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:"1.5rem"}}>
-          {ENSAIOS_DEFAULT.map(e => {
-            const ativo = aplicavel.includes(e.id);
-            const temDados = material.cells[e.id]?.status==="concluido"||material.cells[e.id]?.status==="andamento";
-            return (
-              <label key={e.id} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:"#444",padding:"5px 8px",borderRadius:6,background:ativo?"#d4f5e0":"#f7f5f2",border:ativo?"1px solid #86d9a8":"1px solid transparent",transition:"all .12s"}}>
-                <input type="checkbox" checked={ativo} onChange={()=>toggleEnsaio(e.id)} style={{accentColor:"#2eaa5f"}} />
-                {e.label}
-                {temDados&&<span style={{marginLeft:"auto",fontSize:9,background:"#fff3c4",color:"#8a6800",padding:"1px 5px",borderRadius:4,fontWeight:700}}>dados</span>}
-              </label>
-            );
+          {ENSAIOS_DEFAULT.map(e=>{const ativo=aplicavel.includes(e.id);const temDados=material.cells[e.id]?.status==="concluido"||material.cells[e.id]?.status==="andamento";return(
+            <label key={e.id} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:"#444",padding:"5px 8px",borderRadius:6,background:ativo?"#d4f5e0":"#f7f5f2",border:ativo?"1px solid #86d9a8":"1px solid transparent",transition:"all .12s"}}>
+              <input type="checkbox" checked={ativo} onChange={()=>toggle(e.id)} style={{accentColor:"#2eaa5f"}} />{e.label}
+              {temDados&&<span style={{marginLeft:"auto",fontSize:9,background:"#fff3c4",color:"#8a6800",padding:"1px 5px",borderRadius:4,fontWeight:700}}>dados</span>}
+            </label>);
           })}
         </div>
         <div style={{borderTop:"1px solid #f0eeea",paddingTop:"1rem",display:"flex",gap:8,flexWrap:"wrap"}}>
-          {confirmRemove ? (
-            <>
-              <div style={{width:"100%",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#991b1b",marginBottom:4}}>
-                ⚠️ Remover <strong>{material.codigo}</strong>? Esta ação não pode ser desfeita.
-              </div>
+          {confirmRemove?(
+            <><div style={{width:"100%",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#991b1b",marginBottom:4}}>⚠️ Remover <strong>{material.codigo}</strong>?</div>
               <button onClick={()=>setConfirmRemove(false)} style={{flex:1,padding:"9px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
-              <button onClick={()=>{onRemove(material.id);onClose();}} style={{flex:2,padding:"9px",borderRadius:8,border:"none",background:"#dc2626",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar Remoção</button>
-            </>
-          ) : (
-            <>
-              <button onClick={()=>setConfirmRemove(true)} style={{padding:"9px 14px",borderRadius:8,border:"1px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,color:"#dc2626",fontWeight:600}}>🗑 Remover</button>
+              <button onClick={()=>{onRemove(material.id);onClose();}} style={{flex:2,padding:"9px",borderRadius:8,border:"none",background:"#dc2626",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar</button></>
+          ):(
+            <><button onClick={()=>setConfirmRemove(true)} style={{padding:"9px 14px",borderRadius:8,border:"1px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,color:"#dc2626",fontWeight:600}}>🗑 Remover</button>
               <div style={{flex:1}} />
               <button onClick={onClose} style={{padding:"9px 16px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
-              <button onClick={save} disabled={!codigo.trim()||saving} style={{padding:"9px 20px",borderRadius:8,border:"none",background:codigo.trim()&&!saving?"#1a3a2a":"#ccc",color:"#fff",cursor:codigo.trim()&&!saving?"pointer":"default",fontSize:13,fontWeight:600}}>
-                {saving?"Salvando...":"Salvar"}
-              </button>
-            </>
+              <button onClick={save} disabled={!codigo.trim()||saving} style={{padding:"9px 20px",borderRadius:8,border:"none",background:codigo.trim()&&!saving?"#1a3a2a":"#ccc",color:"#fff",cursor:codigo.trim()&&!saving?"pointer":"default",fontSize:13,fontWeight:600}}>{saving?"Salvando...":"Salvar"}</button></>
           )}
         </div>
       </div>
@@ -377,26 +341,98 @@ function EditMaterialModal({ material, onClose, onSave, onRemove }) {
   );
 }
 
-// ─── DashboardGrid ────────────────────────────────────────────────────────────
-function DashboardGrid({ materiais, onUpdateCell, onEditMaterial, readonly }) {
-  const [activeCell, setActiveCell] = useState(null);
-  const scrollRef = useRef(null);
-  const COL_W = 130, ROW_H = 44;
+// ─── OcorrenciasPanel ─────────────────────────────────────────────────────────
+function OcorrenciasPanel({ turnoAtual, turnoRow, ocorrencias, onSaveTexto, onAddItem, readonly }) {
+  const t = TURNOS.find(t=>t.id===turnoAtual)||TURNOS[0];
+  const [texto, setTexto] = useState("");
+  const [itens, setItens] = useState([]);
+  const [novoTitulo, setNovoTitulo] = useState("");
+  const [novaDesc, setNovaDesc] = useState("");
+  const [salvando, setSalvando] = useState(false);
 
-  function handleCell(mat, ensaio) {
-    if (readonly) return;
-    const cell = mat.cells[ensaio.id];
-    if (!cell || cell.status==="na") return;
-    setActiveCell({mat, ensaio, cell});
+  // Popula a partir das ocorrências salvas
+  const ocTexto = ocorrencias.find(o=>o.tipo==="texto"&&turnoRow&&o.turno_id===turnoRow.id);
+  const ocItens = ocorrencias.filter(o=>o.tipo==="item"&&turnoRow&&o.turno_id===turnoRow.id);
+
+  async function addItem() {
+    if (!novoTitulo.trim()) return;
+    setSalvando(true);
+    await onAddItem(novoTitulo.trim(), novaDesc.trim());
+    setNovoTitulo(""); setNovaDesc(""); setSalvando(false);
   }
 
   return (
-    <div style={{overflowX:"auto",borderRadius:12,border:"1px solid #e8e5de"}} ref={scrollRef}>
+    <div style={{marginTop:"2rem",background:"#fff",borderRadius:14,border:"1px solid #e8e5de",overflow:"hidden"}}>
+      <div style={{padding:"14px 20px",background:t.bg,borderBottom:"1px solid #e8e5de",display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:10,height:10,borderRadius:5,background:t.dot}} />
+        <span style={{fontSize:13,fontWeight:700,color:t.color}}>Ocorrências — {t.label}</span>
+        <span style={{fontSize:11,color:t.color,opacity:.7}}>{t.inicio} às {t.fim}</span>
+        {readonly&&<span style={{marginLeft:"auto",fontSize:11,background:t.color,color:"#fff",padding:"2px 8px",borderRadius:10,fontWeight:600}}>FINALIZADO</span>}
+      </div>
+      <div style={{padding:"1.25rem",display:"grid",gap:"1.25rem"}}>
+
+        {/* Texto livre */}
+        <div>
+          <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>📝 Anotações gerais do turno</p>
+          {readonly ? (
+            <div style={{background:"#f7f5f2",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#3d3d3a",minHeight:60,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+              {ocTexto?.conteudo || <span style={{color:"#bbb",fontStyle:"italic"}}>Sem anotações.</span>}
+            </div>
+          ) : (
+            <textarea value={texto} onChange={e=>setTexto(e.target.value)} placeholder="Anote aqui qualquer informação relevante do turno: problemas, observações, pendências..." rows={4}
+              style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"10px 12px",fontSize:13,boxSizing:"border-box",resize:"vertical",lineHeight:1.6,color:"#3d3d3a"}} />
+          )}
+        </div>
+
+        {/* Lista de itens */}
+        <div>
+          <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>📋 Ocorrências por item</p>
+          {ocItens.length>0&&(
+            <div style={{display:"grid",gap:6,marginBottom:12}}>
+              {ocItens.map((item,i)=>(
+                <div key={i} style={{background:"#f7f5f2",borderRadius:8,padding:"8px 12px",borderLeft:"3px solid "+t.dot}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#1a1a18"}}>{item.conteudo}</div>
+                  {item.descricao&&<div style={{fontSize:12,color:"#666",marginTop:2}}>{item.descricao}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          {!readonly&&(
+            <div style={{background:"#f7f5f2",borderRadius:8,padding:"12px",display:"grid",gap:8}}>
+              <input value={novoTitulo} onChange={e=>setNovoTitulo(e.target.value)} placeholder="Título da ocorrência *"
+                style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}} />
+              <input value={novaDesc} onChange={e=>setNovaDesc(e.target.value)} placeholder="Descrição (opcional)"
+                style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}} />
+              <button onClick={addItem} disabled={!novoTitulo.trim()||salvando}
+                style={{padding:"7px 14px",borderRadius:6,border:"none",background:novoTitulo.trim()&&!salvando?"#1a3a2a":"#ccc",color:"#fff",cursor:novoTitulo.trim()&&!salvando?"pointer":"default",fontSize:12,fontWeight:600,width:"fit-content"}}>
+                + Adicionar item
+              </button>
+            </div>
+          )}
+          {ocItens.length===0&&readonly&&<p style={{fontSize:13,color:"#bbb",fontStyle:"italic",margin:0}}>Nenhum item registrado.</p>}
+        </div>
+      </div>
+
+      {/* Texto para usar no finalizar turno */}
+      {!readonly && <input type="hidden" id={`texto-turno-${turnoAtual}`} value={texto} readOnly />}
+    </div>
+  );
+}
+
+// ─── DashboardGrid ────────────────────────────────────────────────────────────
+function DashboardGrid({ materiais, onUpdateCell, onEditMaterial, readonly }) {
+  const [activeCell, setActiveCell] = useState(null);
+  const COL_W=130, ROW_H=44;
+  function handleCell(mat,ensaio) {
+    if (readonly) return;
+    const cell=mat.cells[ensaio.id];
+    if (!cell||cell.status==="na") return;
+    setActiveCell({mat,ensaio,cell});
+  }
+  return (
+    <div style={{overflowX:"auto",borderRadius:12,border:"1px solid #e8e5de"}}>
       <table style={{borderCollapse:"collapse",tableLayout:"fixed",minWidth:"100%"}}>
-        <colgroup>
-          <col style={{width:200}} />
-          {materiais.map(m=><col key={m.id} style={{width:COL_W}} />)}
-        </colgroup>
+        <colgroup><col style={{width:200}} />{materiais.map(m=><col key={m.id} style={{width:COL_W}} />)}</colgroup>
         <thead>
           <tr style={{background:"#1a3a2a"}}>
             <th style={{padding:"10px 16px",textAlign:"left",color:"#7bc99a",fontSize:11,fontWeight:600,letterSpacing:".07em",textTransform:"uppercase",borderRight:"1px solid #2d5c42"}}>ENSAIO</th>
@@ -404,69 +440,46 @@ function DashboardGrid({ materiais, onUpdateCell, onEditMaterial, readonly }) {
               <th key={m.id} style={{padding:"8px 6px",textAlign:"center",borderRight:"1px solid #2d5c42"}}>
                 <div style={{color:"#fff",fontSize:12,fontWeight:700,lineHeight:1.2}}>{m.codigo}</div>
                 <div style={{color:"#7bc99a",fontSize:10,marginTop:2}}>{m.resina}</div>
-                {!readonly&&(
-                  <button onClick={()=>onEditMaterial(m)}
-                    style={{marginTop:5,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(123,201,154,.35)",background:"rgba(123,201,154,.12)",color:"#7bc99a",cursor:"pointer",fontSize:10,fontWeight:600,transition:"all .15s"}}
-                    onMouseEnter={e=>e.currentTarget.style.background="rgba(123,201,154,.28)"}
-                    onMouseLeave={e=>e.currentTarget.style.background="rgba(123,201,154,.12)"}>
-                    ✎ editar
-                  </button>
-                )}
+                {!readonly&&<button onClick={()=>onEditMaterial(m)} style={{marginTop:5,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(123,201,154,.35)",background:"rgba(123,201,154,.12)",color:"#7bc99a",cursor:"pointer",fontSize:10,fontWeight:600}}
+                  onMouseEnter={e=>e.currentTarget.style.background="rgba(123,201,154,.28)"} onMouseLeave={e=>e.currentTarget.style.background="rgba(123,201,154,.12)"}>✎ editar</button>}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {ENSAIOS_DEFAULT.map((ensaio, ri) => (
+          {ENSAIOS_DEFAULT.map((ensaio,ri)=>(
             <tr key={ensaio.id} style={{background:ri%2===0?"#fafaf8":"#f5f3ef"}}>
               <td style={{padding:"0 16px",height:ROW_H,fontSize:12,fontWeight:500,color:"#3d3d3a",borderRight:"1px solid #e8e5de",whiteSpace:"nowrap"}}>{ensaio.label}</td>
-              {materiais.map(mat => {
-                const cell = mat.cells[ensaio.id];
-                const isNA = !cell || cell.status==="na";
-                return (
-                  <td key={mat.id} onClick={()=>handleCell(mat,ensaio)}
-                    title={isNA?"N/A":`${STATUS_CONFIG[cell.status]?.label}${cell.operador?" — "+cell.operador:""}${cell.hora?" ("+cell.hora+")":""}`}
-                    style={{height:ROW_H,padding:0,borderRight:"1px solid #e8e5de",cursor:!isNA&&!readonly?"pointer":"default",position:"relative"}}>
-                    <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-                      {isNA ? (
-                        <div style={{width:"100%",height:"100%",background:"repeating-linear-gradient(-45deg,#ebe9e3,#ebe9e3 4px,#e2e0da 4px,#e2e0da 8px)"}} />
-                      ) : (
-                        <div style={{width:"100%",height:"100%",background:STATUS_CONFIG[cell.status]?.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2}}>
-                          <div style={{width:8,height:8,borderRadius:4,background:STATUS_CONFIG[cell.status]?.dot}} />
-                          {cell.operador&&<div style={{fontSize:9,color:STATUS_CONFIG[cell.status]?.txt,fontWeight:600,maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cell.operador}</div>}
-                          {cell.hora&&<div style={{fontSize:9,color:STATUS_CONFIG[cell.status]?.txt,opacity:.8}}>{cell.hora}</div>}
-                        </div>
-                      )}
-                    </div>
-                  </td>
-                );
+              {materiais.map(mat=>{
+                const cell=mat.cells[ensaio.id]; const isNA=!cell||cell.status==="na";
+                return (<td key={mat.id} onClick={()=>handleCell(mat,ensaio)}
+                  title={isNA?"N/A":`${STATUS_CONFIG[cell.status]?.label}${cell.operador?" — "+cell.operador:""}${cell.hora?" ("+cell.hora+")":""}`}
+                  style={{height:ROW_H,padding:0,borderRight:"1px solid #e8e5de",cursor:!isNA&&!readonly?"pointer":"default",position:"relative"}}>
+                  <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+                    {isNA?<div style={{width:"100%",height:"100%",background:"repeating-linear-gradient(-45deg,#ebe9e3,#ebe9e3 4px,#e2e0da 4px,#e2e0da 8px)"}} />:
+                    <div style={{width:"100%",height:"100%",background:STATUS_CONFIG[cell.status]?.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2}}>
+                      <div style={{width:8,height:8,borderRadius:4,background:STATUS_CONFIG[cell.status]?.dot}} />
+                      {cell.operador&&<div style={{fontSize:9,color:STATUS_CONFIG[cell.status]?.txt,fontWeight:600,maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cell.operador}</div>}
+                      {cell.hora&&<div style={{fontSize:9,color:STATUS_CONFIG[cell.status]?.txt,opacity:.8}}>{cell.hora}</div>}
+                    </div>}
+                  </div>
+                </td>);
               })}
             </tr>
           ))}
         </tbody>
       </table>
-      {activeCell&&(
-        <CellModal
-          cell={activeCell.cell} ensaio={activeCell.ensaio} material={activeCell.mat}
-          onClose={()=>setActiveCell(null)}
-          onSave={data=>{ onUpdateCell(activeCell.mat.id,activeCell.ensaio.id,data); setActiveCell(null); }}
-        />
-      )}
+      {activeCell&&<CellModal cell={activeCell.cell} ensaio={activeCell.ensaio} material={activeCell.mat} onClose={()=>setActiveCell(null)} onSave={data=>{onUpdateCell(activeCell.mat.id,activeCell.ensaio.id,data);setActiveCell(null);}} />}
     </div>
   );
 }
 
 // ─── StatsBar ─────────────────────────────────────────────────────────────────
 function StatsBar({ progress }) {
-  const { total, done, wip, pending, pct } = progress;
+  const {total,done,wip,pending,pct}=progress;
   return (
     <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:"1.25rem"}}>
-      {[
-        {label:"Concluídos",   val:done,    color:"#2eaa5f", bg:"#d4f5e0"},
-        {label:"Em Andamento", val:wip,     color:"#f0b429", bg:"#fff3c4"},
-        {label:"Pendentes",    val:pending, color:"#888",    bg:"#f0eeea"},
-        {label:"Progresso",    val:pct+"%", color:"#185fa5", bg:"#e6f1fb"},
-      ].map(s=>(
+      {[{label:"Concluídos",val:done,color:"#2eaa5f",bg:"#d4f5e0"},{label:"Em Andamento",val:wip,color:"#f0b429",bg:"#fff3c4"},{label:"Pendentes",val:pending,color:"#888",bg:"#f0eeea"},{label:"Progresso",val:pct+"%",color:"#185fa5",bg:"#e6f1fb"}].map(s=>(
         <div key={s.label} style={{background:s.bg,borderRadius:10,padding:"10px 18px",display:"flex",alignItems:"center",gap:10}}>
           <div style={{fontSize:22,fontWeight:700,color:s.color}}>{s.val}</div>
           <div style={{fontSize:11,color:s.color,fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{s.label}</div>
@@ -488,74 +501,240 @@ function Legend() {
     <div style={{display:"flex",gap:16,flexWrap:"wrap",background:"#f7f5f2",borderRadius:8,padding:"8px 14px",marginBottom:"1.25rem",alignItems:"center"}}>
       <span style={{fontSize:11,color:"#aaa",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em"}}>Legenda:</span>
       {Object.entries(STATUS_CONFIG).filter(([k])=>k!=="na").map(([k,v])=>(
-        <div key={k} style={{display:"flex",alignItems:"center",gap:5}}>
-          <div style={{width:10,height:10,borderRadius:5,background:v.dot}} />
-          <span style={{fontSize:11,color:"#666"}}>{v.label}</span>
-        </div>
+        <div key={k} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:5,background:v.dot}} /><span style={{fontSize:11,color:"#666"}}>{v.label}</span></div>
       ))}
-      <div style={{display:"flex",alignItems:"center",gap:5}}>
-        <div style={{width:10,height:10,background:"repeating-linear-gradient(-45deg,#e2e0da,#e2e0da 2px,#ebe9e3 2px,#ebe9e3 4px)"}} />
-        <span style={{fontSize:11,color:"#666"}}>Não aplicável</span>
+      <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,background:"repeating-linear-gradient(-45deg,#e2e0da,#e2e0da 2px,#ebe9e3 2px,#ebe9e3 4px)"}} /><span style={{fontSize:11,color:"#666"}}>Não aplicável</span></div>
+    </div>
+  );
+}
+
+// ─── OcorrenciasPanel ─────────────────────────────────────────────────────────
+function OcorrenciasPanel({ turnoAtual, ocorrencias, onAddItem, readonly }) {
+  const [titulo, setTitulo] = useState("");
+  const [desc, setDesc]     = useState("");
+  const [texto, setTexto]   = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const t = TURNOS.find(x => x.id === turnoAtual);
+  const itensDoTurno = (ocorrencias||[]).filter(o => o.tipo === "item");
+  const textoDoTurno = (ocorrencias||[]).find(o => o.tipo === "texto");
+
+  async function addItem() {
+    if (!titulo.trim() || saving) return;
+    setSaving(true);
+    await onAddItem(titulo.trim(), desc.trim());
+    setTitulo(""); setDesc("");
+    setSaving(false);
+  }
+
+  return (
+    <div style={{marginTop:"2rem",background:"#fff",borderRadius:14,border:"1px solid #e8e5de",padding:"1.5rem"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:"1.25rem"}}>
+        <div style={{width:10,height:10,borderRadius:5,background:t?.dot}} />
+        <h2 style={{margin:0,fontSize:16,fontWeight:700,color:"#1a1a18"}}>Ocorrências — {t?.label}</h2>
+        <span style={{fontSize:11,color:t?.color,background:t?.bg,padding:"2px 10px",borderRadius:10,fontWeight:600}}>{t?.inicio} às {t?.fim}</span>
+      </div>
+
+      {textoDoTurno && (
+        <div style={{background:"#f7f5f2",borderRadius:8,padding:"10px 14px",marginBottom:"1rem",borderLeft:"3px solid "+t?.dot}}>
+          <p style={{fontSize:11,color:"#888",margin:"0 0 4px",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Anotações gerais</p>
+          <p style={{margin:0,fontSize:13,color:"#444",lineHeight:1.6}}>{textoDoTurno.conteudo}</p>
+        </div>
+      )}
+
+      {itensDoTurno.length > 0 && (
+        <div style={{display:"grid",gap:6,marginBottom:"1rem"}}>
+          {itensDoTurno.map((item,i) => (
+            <div key={item.id||i} style={{background:"#f7f5f2",borderRadius:8,padding:"8px 12px",borderLeft:"3px solid "+t?.dot}}>
+              <div style={{fontSize:13,fontWeight:600,color:"#1a1a18"}}>{item.conteudo}</div>
+              {item.descricao && <div style={{fontSize:12,color:"#666",marginTop:2}}>{item.descricao}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!readonly && (
+        <div style={{background:"#f7f5f2",borderRadius:8,padding:"12px",display:"grid",gap:8}}>
+          <p style={{fontSize:11,color:"#888",margin:0,fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Adicionar ocorrência</p>
+          <input value={titulo} onChange={e=>setTitulo(e.target.value)} placeholder="Título da ocorrência"
+            style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}}
+            onKeyDown={e=>e.key==="Enter"&&addItem()} />
+          <input value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Descrição (opcional)"
+            style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}} />
+          <button onClick={addItem} disabled={!titulo.trim()||saving}
+            style={{padding:"7px 16px",borderRadius:6,border:"none",background:titulo.trim()&&!saving?"#1a3a2a":"#ccc",color:"#fff",cursor:titulo.trim()&&!saving?"pointer":"default",fontSize:12,fontWeight:600,width:"fit-content"}}>
+            {saving?"Salvando...":"+ Adicionar"}
+          </button>
+        </div>
+      )}
+
+      {!textoDoTurno && itensDoTurno.length === 0 && readonly && (
+        <p style={{color:"#bbb",fontSize:13,textAlign:"center",padding:"1rem 0",margin:0}}>Nenhuma ocorrência registrada neste turno.</p>
+      )}
+    </div>
+  );
+}
+
+// ─── TurnoBadge ───────────────────────────────────────────────────────────────
+function TurnoBadge({ turnoAtual, turnosFinalizados }) {
+  if (!turnoAtual) return <span style={{background:"rgba(123,201,154,.2)",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>TODOS OS TURNOS FINALIZADOS</span>;
+  const t=TURNOS.find(x=>x.id===turnoAtual);
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:6}}>
+      {TURNOS.map(t=>(
+        <span key={t.id} style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,background:turnosFinalizados.includes(t.id)?"rgba(255,255,255,.1)":t.id===turnoAtual?"rgba(255,255,255,.2)":"transparent",color:turnosFinalizados.includes(t.id)?"#5a9470":t.id===turnoAtual?"#fff":"#5a9470",textDecoration:turnosFinalizados.includes(t.id)?"line-through":"none"}}>
+          {t.label}{turnosFinalizados.includes(t.id)?" ✓":""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ─── FinalizarTurnoModal ──────────────────────────────────────────────────────
+function FinalizarTurnoModal({ turnoAtual, progress, onClose, onConfirm }) {
+  const t=TURNOS.find(x=>x.id===turnoAtual);
+  const [texto, setTexto] = useState("");
+  const [itens, setItens] = useState([]);
+  const [novoTitulo, setNovoTitulo] = useState("");
+  const [novaDesc, setNovaDesc] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  function addItem() { if (!novoTitulo.trim()) return; setItens(p=>[...p,{titulo:novoTitulo.trim(),descricao:novaDesc.trim()}]); setNovoTitulo(""); setNovaDesc(""); }
+  function removeItem(i) { setItens(p=>p.filter((_,idx)=>idx!==i)); }
+
+  async function confirm() {
+    setSalvando(true);
+    await onConfirm(texto, itens);
+    onClose();
+  }
+
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"1.75rem",width:"min(560px,100%)",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
+        <div style={{width:48,height:48,borderRadius:24,background:t.bg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,marginBottom:"1rem"}}>🔔</div>
+        <h3 style={{margin:"0 0 .5rem",fontSize:18,fontWeight:700}}>Finalizar {t.label}?</h3>
+        <p style={{color:"#666",fontSize:13,margin:"0 0 1.25rem",lineHeight:1.6}}>{t.inicio} às {t.fim} — registre as ocorrências antes de finalizar.</p>
+        {progress.pct<100&&<div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>⚠️ Ainda há <strong>{progress.pending}</strong> ensaio{progress.pending!==1?"s":""} pendente{progress.pending!==1?"s":""}.</div>}
+
+        <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 6px"}}>📝 Anotações gerais</p>
+        <textarea value={texto} onChange={e=>setTexto(e.target.value)} placeholder="Descreva o que ocorreu no turno, pendências, observações..." rows={3}
+          style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"9px 12px",fontSize:13,boxSizing:"border-box",resize:"vertical",marginBottom:"1.25rem"}} />
+
+        <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 8px"}}>📋 Ocorrências por item</p>
+        {itens.length>0&&<div style={{display:"grid",gap:6,marginBottom:10}}>
+          {itens.map((item,i)=>(
+            <div key={i} style={{background:"#f7f5f2",borderRadius:8,padding:"8px 12px",borderLeft:"3px solid "+t.dot,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div><div style={{fontSize:13,fontWeight:600}}>{item.titulo}</div>{item.descricao&&<div style={{fontSize:12,color:"#666",marginTop:1}}>{item.descricao}</div>}</div>
+              <button onClick={()=>removeItem(i)} style={{background:"none",border:"none",cursor:"pointer",color:"#aaa",fontSize:16,lineHeight:1,flexShrink:0}}>×</button>
+            </div>
+          ))}
+        </div>}
+        <div style={{background:"#f7f5f2",borderRadius:8,padding:"10px",display:"grid",gap:6,marginBottom:"1.5rem"}}>
+          <input value={novoTitulo} onChange={e=>setNovoTitulo(e.target.value)} placeholder="Título da ocorrência" style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}} />
+          <input value={novaDesc} onChange={e=>setNovaDesc(e.target.value)} placeholder="Descrição (opcional)" style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"7px 10px",fontSize:13,boxSizing:"border-box",width:"100%"}} />
+          <button onClick={addItem} disabled={!novoTitulo.trim()} style={{padding:"6px 12px",borderRadius:6,border:"none",background:novoTitulo.trim()?"#1a3a2a":"#ccc",color:"#fff",cursor:novoTitulo.trim()?"pointer":"default",fontSize:12,fontWeight:600,width:"fit-content"}}>+ Adicionar</button>
+        </div>
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
+          <button onClick={confirm} disabled={salvando} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:salvando?"#ccc":"#1a3a2a",color:"#fff",cursor:salvando?"default":"pointer",fontSize:13,fontWeight:700}}>{salvando?"Salvando...":"Confirmar Finalização"}</button>
+        </div>
       </div>
     </div>
   );
 }
 
 // ─── DashboardPage ────────────────────────────────────────────────────────────
-function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell, onEditMaterial, onRemoveMaterial, onLimparDashboard }) {
+function DashboardPage({ dia, onFinalizarDia, onFinalizarTurno, onAddMaterial, onUpdateCell, onEditMaterial, onRemoveMaterial, onLimparDashboard, onDateChange }) {
   const [showAdd, setShowAdd] = useState(false);
   const [showFinalizar, setShowFinalizar] = useState(false);
+  const [showFinalizarTurno, setShowFinalizarTurno] = useState(false);
   const [showLimpar, setShowLimpar] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
   const progress = calcProgress(dia.materiais);
 
+  const turnosFinalizados = (dia.turnos||[]).filter(t=>t.finalizado).map(t=>t.numero);
+  const turnoAtual = getTurnoAtual(turnosFinalizados);
+  const todosFinalizados = turnosFinalizados.length===3;
+  const isHoje = dia.date === today();
+  const readonly = dia.finalizado || (!isHoje); // dias passados são editáveis mas não têm turno
+
   return (
     <div>
+      {/* Header do dashboard */}
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:"1.5rem",flexWrap:"wrap",gap:12}}>
         <div>
-          <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <h1 style={{margin:0,fontSize:26,fontWeight:800,color:"#1a1a18",letterSpacing:"-.02em"}}>Dashboard Diário</h1>
-            {dia.finalizado&&<span style={{background:"#1a3a2a",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,letterSpacing:".06em"}}>FINALIZADO</span>}
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <h1 style={{margin:0,fontSize:26,fontWeight:800,color:"#1a1a18",letterSpacing:"-.02em"}}>Dashboard</h1>
+            {dia.finalizado&&<span style={{background:"#1a3a2a",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>FINALIZADO</span>}
           </div>
-          <p style={{margin:"4px 0 0",fontSize:15,color:"#888"}}>{fmtDate(dia.date)} — {dia.materiais.length} {dia.materiais.length===1?"material":"materiais"}</p>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginTop:6,flexWrap:"wrap"}}>
+            {/* Seletor de data */}
+            <input type="date" value={dia.date} max={today()} onChange={e=>onDateChange(e.target.value)}
+              style={{border:"1px solid #e0ddd6",borderRadius:8,padding:"5px 10px",fontSize:13,color:"#444",cursor:"pointer"}} />
+            <span style={{fontSize:13,color:"#888"}}>{dia.materiais.length} {dia.materiais.length===1?"material":"materiais"}</span>
+            {!isHoje&&<span style={{fontSize:11,background:"#e6f1fb",color:"#185fa5",padding:"2px 10px",borderRadius:10,fontWeight:600}}>Dia anterior</span>}
+          </div>
         </div>
-        {!dia.finalizado&&(
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <button onClick={()=>setShowLimpar(true)} style={{padding:"9px 16px",borderRadius:9,border:"1.5px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,fontWeight:600,color:"#dc2626",display:"flex",alignItems:"center",gap:6}}>
-              🗑 Limpar Dashboard
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {!dia.finalizado&&(
+            <button onClick={()=>setShowLimpar(true)} style={{padding:"9px 16px",borderRadius:9,border:"1.5px solid #fca5a5",background:"#fef2f2",cursor:"pointer",fontSize:13,fontWeight:600,color:"#dc2626"}}>🗑 Limpar</button>
+          )}
+          <button onClick={()=>setShowAdd(true)} style={{padding:"9px 18px",borderRadius:9,border:"1.5px solid #e0ddd6",background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:"#444"}}>+ Material</button>
+          {isHoje&&!dia.finalizado&&turnoAtual&&(
+            <button onClick={()=>setShowFinalizarTurno(true)} style={{padding:"9px 18px",borderRadius:9,border:"none",background:TURNOS.find(t=>t.id===turnoAtual)?.dot||"#378add",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>
+              🔔 Finalizar {TURNOS.find(t=>t.id===turnoAtual)?.label}
             </button>
-            <button onClick={()=>setShowAdd(true)} style={{padding:"9px 18px",borderRadius:9,border:"1.5px solid #e0ddd6",background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:"#444",display:"flex",alignItems:"center",gap:6}}>
-              <span style={{fontSize:16,lineHeight:1}}>+</span> Adicionar Material
-            </button>
-            <button onClick={()=>setShowFinalizar(true)} style={{padding:"9px 20px",borderRadius:9,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>
-              ✓ Finalizar Dia
-            </button>
-          </div>
-        )}
+          )}
+          {isHoje&&!dia.finalizado&&(
+            <button onClick={()=>setShowFinalizar(true)} style={{padding:"9px 20px",borderRadius:9,border:"none",background:"#1a3a2a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>✓ Finalizar Dia</button>
+          )}
+        </div>
       </div>
 
       <StatsBar progress={progress} />
 
-      {dia.materiais.length===0 ? (
+      {dia.materiais.length===0?(
         <div style={{textAlign:"center",padding:"4rem 2rem",color:"#aaa",background:"#fafaf8",borderRadius:12,border:"1.5px dashed #e0ddd6"}}>
           <div style={{fontSize:32,marginBottom:8}}>📋</div>
           <p style={{fontWeight:600,color:"#888",margin:"0 0 8px"}}>Nenhum material cadastrado</p>
-          <p style={{fontSize:13,margin:0}}>Clique em "Adicionar Material" para começar</p>
+          <p style={{fontSize:13,margin:0}}>Clique em "+ Material" para começar</p>
         </div>
-      ) : (
+      ):(
         <DashboardGrid materiais={dia.materiais} onUpdateCell={onUpdateCell} onEditMaterial={setEditingMaterial} readonly={dia.finalizado} />
       )}
 
+      {/* Painel de ocorrências — só no dia atual */}
+      {isHoje&&turnoAtual&&(
+        <OcorrenciasPanel
+          turnoAtual={turnoAtual}
+          turnoRow={(dia.turnos||[]).find(t=>t.numero===turnoAtual&&!t.finalizado)||null}
+          ocorrencias={dia.ocorrencias||[]}
+          onSaveTexto={()=>{}}
+          onAddItem={async(titulo,desc)=>{
+            const turnoRow = await dbGetOrCreateTurno(dia.id, turnoAtual);
+            await dbSalvarOcorrencia(turnoRow.id, "item", titulo, desc);
+          }}
+          readonly={false}
+        />
+      )}
+
+      {/* Modais */}
       {showAdd&&<AddMaterialModal onClose={()=>setShowAdd(false)} onAdd={onAddMaterial} />}
       {editingMaterial&&<EditMaterialModal material={editingMaterial} onClose={()=>setEditingMaterial(null)} onSave={async mat=>{await onEditMaterial(mat);setEditingMaterial(null);}} onRemove={async id=>{await onRemoveMaterial(id);setEditingMaterial(null);}} />}
+
+      {showFinalizarTurno&&turnoAtual&&(
+        <FinalizarTurnoModal turnoAtual={turnoAtual} progress={progress} onClose={()=>setShowFinalizarTurno(false)}
+          onConfirm={async(texto,itens)=>{ await onFinalizarTurno(turnoAtual,texto,itens); }} />
+      )}
 
       {showLimpar&&(
         <div onClick={()=>setShowLimpar(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:400,boxShadow:"0 20px 60px rgba(0,0,0,.2)"}}>
             <div style={{width:48,height:48,borderRadius:24,background:"#fef2f2",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,marginBottom:"1rem"}}>🗑</div>
             <h3 style={{margin:"0 0 .75rem",fontSize:18,fontWeight:700}}>Limpar o dashboard?</h3>
-            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>Todos os <strong>{dia.materiais.length} materiais</strong> e seus ensaios serão removidos permanentemente do banco de dados.</p>
-            <p style={{color:"#dc2626",fontSize:13,margin:"0 0 1.5rem",fontWeight:600}}>⚠️ Esta ação não pode ser desfeita e os dados não serão salvos no histórico.</p>
+            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>Todos os <strong>{dia.materiais.length} materiais</strong> serão removidos permanentemente.</p>
+            <p style={{color:"#dc2626",fontSize:13,margin:"0 0 1.5rem",fontWeight:600}}>⚠️ Esta ação não pode ser desfeita.</p>
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>setShowLimpar(false)} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13}}>Cancelar</button>
               <button onClick={()=>{onLimparDashboard();setShowLimpar(false);}} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:"#dc2626",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Limpar Tudo</button>
@@ -569,7 +748,8 @@ function DashboardPage({ dia, onFinalizarDia, onAddMaterial, onUpdateCell, onEdi
           <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:400,boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
             <div style={{width:48,height:48,borderRadius:24,background:"#d4f5e0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,marginBottom:"1rem"}}>✓</div>
             <h3 style={{margin:"0 0 .75rem",fontSize:18,fontWeight:700}}>Finalizar o dia?</h3>
-            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>O dashboard de <strong>{fmtDate(dia.date)}</strong> será salvo no histórico e o painel será limpo para um novo dia.</p>
+            <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>O dia <strong>{fmtDate(dia.date)}</strong> será salvo no histórico e o painel será limpo para o próximo dia.</p>
+            {!todosFinalizados&&<div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>⚠️ {3-turnosFinalizados.length} turno{3-turnosFinalizados.length!==1?"s":""} ainda não finalizado{3-turnosFinalizados.length!==1?"s":""}.</div>}
             {progress.pct<100&&<div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>⚠️ Ainda há <strong>{progress.pending}</strong> ensaio{progress.pending!==1?"s":""} pendente{progress.pending!==1?"s":""}.</div>}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>setShowFinalizar(false)} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13}}>Cancelar</button>
@@ -588,11 +768,12 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
   const [buscaMat, setBuscaMat] = useState("");
   const [selecionado, setSelecionado] = useState(null);
   const [showReabrir, setShowReabrir] = useState(false);
+  const [turnoVer, setTurnoVer] = useState(null);
 
-  const filtrado = historico.filter(h => {
-    const byDate = !busca || h.date.includes(busca) || fmtDate(h.date).includes(busca);
-    const byCod  = !buscaMat || h.materiais.some(m=>m.codigo.toLowerCase().includes(buscaMat.toLowerCase())||m.resina?.toLowerCase().includes(buscaMat.toLowerCase()));
-    return byDate && byCod;
+  const filtrado = historico.filter(h=>{
+    const byDate=!busca||h.date.includes(busca)||fmtDate(h.date).includes(busca);
+    const byCod=!buscaMat||h.materiais.some(m=>m.codigo.toLowerCase().includes(buscaMat.toLowerCase())||m.resina?.toLowerCase().includes(buscaMat.toLowerCase()));
+    return byDate&&byCod;
   }).sort((a,b)=>b.date.localeCompare(a.date));
 
   return (
@@ -603,13 +784,11 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
         <input value={buscaMat} onChange={e=>setBuscaMat(e.target.value)} placeholder="Buscar por código ou resina..." style={{flex:1,minWidth:200,border:"1px solid #e0ddd6",borderRadius:9,padding:"9px 12px",fontSize:13}} />
         {(busca||buscaMat)&&<button onClick={()=>{setBusca("");setBuscaMat("");}} style={{padding:"9px 14px",borderRadius:9,border:"1px solid #e0ddd6",background:"#f7f5f2",cursor:"pointer",fontSize:13,color:"#888"}}>✕ Limpar</button>}
       </div>
-      {selecionado ? (
+      {selecionado?(
         <div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:"1rem"}}>
-            <button onClick={()=>{setSelecionado(null);setShowReabrir(false);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#444"}}>← Voltar</button>
-            <button onClick={()=>setShowReabrir(true)} style={{padding:"8px 18px",borderRadius:8,border:"1.5px solid #f0b429",background:"#fff8ed",cursor:"pointer",fontSize:13,fontWeight:600,color:"#8a6800",display:"flex",alignItems:"center",gap:6}}>
-              🔓 Reabrir Dia
-            </button>
+            <button onClick={()=>{setSelecionado(null);setShowReabrir(false);setTurnoVer(null);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#444"}}>← Voltar</button>
+            <button onClick={()=>setShowReabrir(true)} style={{padding:"8px 18px",borderRadius:8,border:"1.5px solid #f0b429",background:"#fff8ed",cursor:"pointer",fontSize:13,fontWeight:600,color:"#8a6800"}}>🔓 Reabrir Dia</button>
           </div>
           <div style={{marginBottom:"1rem"}}>
             <h2 style={{margin:"0 0 4px",fontSize:18,fontWeight:700}}>{fmtDate(selecionado.date)}</h2>
@@ -618,33 +797,118 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
           <StatsBar progress={calcProgress(selecionado.materiais)} />
           <DashboardGrid materiais={selecionado.materiais} onUpdateCell={()=>{}} onEditMaterial={()=>{}} readonly={true} />
 
+          {/* Turnos e ocorrências */}
+          {TURNOS.map(t => {
+            const turnoRow = (selecionado.turnos||[]).find(tr => tr.numero === t.id);
+            if (!turnoRow) return null;
+            const ocs = (selecionado.ocorrencias||[]).filter(o => o.turno_id === turnoRow.id);
+            return (
+              <div key={t.id} style={{marginTop:"1.5rem",background:"#fff",borderRadius:14,border:"1px solid #e8e5de",padding:"1.25rem"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:"1rem"}}>
+                  <div style={{width:10,height:10,borderRadius:5,background:t.dot}} />
+                  <h3 style={{margin:0,fontSize:15,fontWeight:700,color:"#1a1a18"}}>{t.label}</h3>
+                  <span style={{fontSize:11,color:t.color,background:t.bg,padding:"2px 10px",borderRadius:10,fontWeight:600}}>{t.inicio} às {t.fim}</span>
+                  {turnoRow.finalizado_em && <span style={{fontSize:11,color:"#aaa",marginLeft:"auto"}}>Finalizado às {new Date(turnoRow.finalizado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}</span>}
+                </div>
+                {ocs.length === 0 ? (
+                  <p style={{color:"#bbb",fontSize:13,margin:0}}>Nenhuma ocorrência registrada.</p>
+                ) : (
+                  <div style={{display:"grid",gap:6}}>
+                    {ocs.filter(o=>o.tipo==="texto").map((o,i) => (
+                      <div key={i} style={{background:"#f7f5f2",borderRadius:8,padding:"10px 14px",borderLeft:"3px solid "+t.dot}}>
+                        <p style={{fontSize:11,color:"#888",margin:"0 0 4px",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Anotações gerais</p>
+                        <p style={{margin:0,fontSize:13,color:"#444",lineHeight:1.6}}>{o.conteudo}</p>
+                      </div>
+                    ))}
+                    {ocs.filter(o=>o.tipo==="item").map((o,i) => (
+                      <div key={i} style={{background:"#f7f5f2",borderRadius:8,padding:"8px 12px",borderLeft:"3px solid "+t.dot}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#1a1a18"}}>{o.conteudo}</div>
+                        {o.descricao && <div style={{fontSize:12,color:"#666",marginTop:2}}>{o.descricao}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Ocorrências dos turnos */}
+          {(selecionado.turnos||[]).length>0&&(
+            <div style={{marginTop:"2rem"}}>
+              <h3 style={{fontSize:15,fontWeight:700,color:"#1a1a18",margin:"0 0 1rem"}}>Ocorrências por Turno</h3>
+              <div style={{display:"flex",gap:8,marginBottom:"1rem",flexWrap:"wrap"}}>
+                {TURNOS.map(t=>{
+                  const turnoRow=(selecionado.turnos||[]).find(tr=>tr.numero===t.id);
+                  if (!turnoRow) return null;
+                  return <button key={t.id} onClick={()=>setTurnoVer(turnoVer===t.id?null:t.id)}
+                    style={{padding:"6px 14px",borderRadius:8,border:"1.5px solid "+(turnoVer===t.id?t.dot:"#e0ddd6"),background:turnoVer===t.id?t.bg:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,color:t.color}}>
+                    {t.label} {t.inicio}–{t.fim}
+                  </button>;
+                })}
+              </div>
+              {turnoVer&&(()=>{
+                const t=TURNOS.find(x=>x.id===turnoVer);
+                const turnoRow=(selecionado.turnos||[]).find(tr=>tr.numero===turnoVer);
+                if (!turnoRow) return null;
+                const ocTexto=(selecionado.ocorrencias||[]).find(o=>o.turno_id===turnoRow.id&&o.tipo==="texto");
+                const ocItens=(selecionado.ocorrencias||[]).filter(o=>o.turno_id===turnoRow.id&&o.tipo==="item");
+                return (
+                  <div style={{background:"#fff",borderRadius:12,border:"1px solid #e8e5de",overflow:"hidden"}}>
+                    <div style={{padding:"12px 18px",background:t.bg,borderBottom:"1px solid #e8e5de",display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:8,height:8,borderRadius:4,background:t.dot}} />
+                      <span style={{fontSize:13,fontWeight:700,color:t.color}}>{t.label} — {t.inicio} às {t.fim}</span>
+                    </div>
+                    <div style={{padding:"1.25rem",display:"grid",gap:"1rem"}}>
+                      <div>
+                        <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 6px"}}>📝 Anotações gerais</p>
+                        <div style={{background:"#f7f5f2",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#3d3d3a",minHeight:48,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                          {ocTexto?.conteudo||<span style={{color:"#bbb",fontStyle:"italic"}}>Sem anotações.</span>}
+                        </div>
+                      </div>
+                      {ocItens.length>0&&(
+                        <div>
+                          <p style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",margin:"0 0 6px"}}>📋 Ocorrências</p>
+                          <div style={{display:"grid",gap:6}}>
+                            {ocItens.map((item,i)=>(
+                              <div key={i} style={{background:"#f7f5f2",borderRadius:8,padding:"8px 12px",borderLeft:"3px solid "+t.dot}}>
+                                <div style={{fontSize:13,fontWeight:600}}>{item.conteudo}</div>
+                                {item.descricao&&<div style={{fontSize:12,color:"#666",marginTop:2}}>{item.descricao}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {showReabrir&&(
             <div onClick={()=>setShowReabrir(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
               <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:16,padding:"2rem",width:400,boxShadow:"0 20px 60px rgba(0,0,0,.18)"}}>
                 <div style={{width:48,height:48,borderRadius:24,background:"#fff8ed",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,marginBottom:"1rem"}}>🔓</div>
                 <h3 style={{margin:"0 0 .75rem",fontSize:18,fontWeight:700}}>Reabrir o dia?</h3>
-                <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>
-                  O dia <strong>{fmtDate(selecionado.date)}</strong> voltará para o Dashboard para edição.
-                </p>
-                <div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>
-                  ⚠️ O dia atual em aberto no Dashboard será substituído por este.
-                </div>
+                <p style={{color:"#666",fontSize:14,margin:"0 0 .75rem",lineHeight:1.6}}>O dia <strong>{fmtDate(selecionado.date)}</strong> voltará para o Dashboard para edição.</p>
+                <div style={{background:"#fff3c4",border:"1px solid #f0b429",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#8a6800",marginBottom:"1.25rem"}}>⚠️ O dia atual em aberto no Dashboard será substituído por este.</div>
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>setShowReabrir(false)} style={{flex:1,padding:"10px",borderRadius:8,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#888"}}>Cancelar</button>
-                  <button onClick={()=>{onReopenDia(selecionado);setShowReabrir(false);setSelecionado(null);}} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:"#8a6800",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar Reabertura</button>
+                  <button onClick={()=>{onReopenDia(selecionado);setShowReabrir(false);setSelecionado(null);}} style={{flex:2,padding:"10px",borderRadius:8,border:"none",background:"#8a6800",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Confirmar</button>
                 </div>
               </div>
             </div>
           )}
         </div>
-      ) : loading ? (
+      ):loading?(
         <div style={{textAlign:"center",padding:"3rem",color:"#aaa"}}>Carregando histórico...</div>
-      ) : (
+      ):(
         <div>
           <p style={{fontSize:13,color:"#aaa",margin:"0 0 12px"}}>{filtrado.length} registro{filtrado.length!==1?"s":""}</p>
           <div style={{display:"grid",gap:8}}>
-            {filtrado.map(h => {
-              const prog = calcProgress(h.materiais);
+            {filtrado.map(h=>{
+              const prog=calcProgress(h.materiais);
+              const nTurnos=(h.turnos||[]).length;
               return (
                 <div key={h.id} onClick={()=>setSelecionado(h)}
                   style={{background:"#fff",borderRadius:12,border:"1px solid #e8e5de",padding:"14px 18px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,transition:"box-shadow .15s,border-color .15s"}}
@@ -653,6 +917,7 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
                   <div>
                     <div style={{fontWeight:700,fontSize:15,color:"#1a1a18"}}>{fmtDate(h.date)}</div>
                     <div style={{fontSize:12,color:"#888",marginTop:2}}>{h.materiais.length} materiais — {h.materiais.map(m=>m.resina).filter((v,i,a)=>a.indexOf(v)===i&&v).join(", ")}</div>
+                    {nTurnos>0&&<div style={{fontSize:11,color:"#aaa",marginTop:2}}>{nTurnos} turno{nTurnos!==1?"s":""} registrado{nTurnos!==1?"s":""}</div>}
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
                     <div style={{textAlign:"right"}}>
@@ -679,38 +944,45 @@ function HistoricoPage({ historico, loading, onReopenDia }) {
 // ─── IndicadoresPage ──────────────────────────────────────────────────────────
 function IndicadoresPage({ diaAtual, historico }) {
   const [filtro, setFiltro] = useState("mes");
+  const [dataInicio, setDataInicio] = useState("");
+  const [dataFim, setDataFim] = useState(today());
 
-  function getDiasFiltro(f) {
+  function getDiasFiltro() {
     const all = [diaAtual, ...historico];
-    if (f==="hoje") return all.filter(d=>d.date===today());
-    if (f==="semana") { const r=new Date(); r.setDate(r.getDate()-7); return all.filter(d=>new Date(d.date)>=r); }
-    if (f==="mes")    { const r=new Date(); r.setDate(r.getDate()-30); return all.filter(d=>new Date(d.date)>=r); }
+    if (filtro==="hoje") return all.filter(d=>d.date===today());
+    if (filtro==="semana") { const r=new Date(); r.setDate(r.getDate()-7); return all.filter(d=>new Date(d.date)>=r); }
+    if (filtro==="mes")   { const r=new Date(); r.setDate(r.getDate()-30); return all.filter(d=>new Date(d.date)>=r); }
+    if (filtro==="personalizado") {
+      return all.filter(d=>{
+        const dt=new Date(d.date);
+        const ok1=!dataInicio||dt>=new Date(dataInicio);
+        const ok2=!dataFim||dt<=new Date(dataFim);
+        return ok1&&ok2;
+      });
+    }
     return all;
   }
 
-  const diasUsados = getDiasFiltro(filtro);
-
-  const rankingFinal = ENSAIOS_DEFAULT.map(ensaio => {
+  const diasUsados = getDiasFiltro();
+  const rankingFinal = ENSAIOS_DEFAULT.map(ensaio=>{
     let realizados=0, pendentes=0, andamento=0;
-    diasUsados.forEach(dia => {
-      dia.materiais.forEach(mat => {
-        const cell = mat.cells[ensaio.id];
-        if (!cell||cell.status==="na") return;
-        if (cell.status==="concluido") realizados++;
-        else if (cell.status==="andamento") andamento++;
-        else pendentes++;
-      });
-    });
-    const total = realizados+andamento+pendentes;
-    return { ...ensaio, realizados, pendentes, andamento, total, pct:total>0?Math.round((realizados/total)*100):0 };
+    diasUsados.forEach(dia=>{(dia.materiais||[]).forEach(mat=>{
+      const cell=mat.cells[ensaio.id];
+      if (!cell||cell.status==="na") return;
+      if (cell.status==="concluido") realizados++;
+      else if (cell.status==="andamento") andamento++;
+      else pendentes++;
+    });});
+    const total=realizados+andamento+pendentes;
+    return {...ensaio,realizados,pendentes,andamento,total,pct:total>0?Math.round((realizados/total)*100):0};
   }).sort((a,b)=>b.realizados-a.realizados);
 
-  const maxR = rankingFinal[0]?.realizados||1;
-  const totR = rankingFinal.reduce((s,e)=>s+e.realizados,0);
-  const totP = rankingFinal.reduce((s,e)=>s+e.pendentes,0);
-  const totD = diasUsados.length;
-  const media = totD>0?Math.round(totR/totD):0;
-  const MEDAL = ["🥇","🥈","🥉"];
+  const maxR=rankingFinal[0]?.realizados||1;
+  const totR=rankingFinal.reduce((s,e)=>s+e.realizados,0);
+  const totP=rankingFinal.reduce((s,e)=>s+e.pendentes,0);
+  const totD=diasUsados.length;
+  const media=totD>0?Math.round(totR/totD):0;
+  const MEDAL=["🥇","🥈","🥉"];
 
   return (
     <div>
@@ -719,26 +991,33 @@ function IndicadoresPage({ diaAtual, historico }) {
           <h1 style={{margin:0,fontSize:26,fontWeight:800,color:"#1a1a18",letterSpacing:"-.02em"}}>Indicadores</h1>
           <p style={{margin:"4px 0 0",fontSize:15,color:"#888"}}>Frequência e volume de ensaios realizados</p>
         </div>
-        <div style={{display:"flex",gap:6,background:"#eceae5",borderRadius:10,padding:4}}>
-          {[{id:"hoje",label:"Hoje"},{id:"semana",label:"7 dias"},{id:"mes",label:"30 dias"},{id:"tudo",label:"Tudo"}].map(o=>(
-            <button key={o.id} onClick={()=>setFiltro(o.id)} style={{padding:"6px 16px",borderRadius:7,border:"none",background:filtro===o.id?"#1a3a2a":"transparent",color:filtro===o.id?"#7bc99a":"#888",cursor:"pointer",fontSize:13,fontWeight:600,transition:"all .15s"}}>{o.label}</button>
-          ))}
+        <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"flex-end"}}>
+          <div style={{display:"flex",gap:6,background:"#eceae5",borderRadius:10,padding:4}}>
+            {[{id:"hoje",label:"Hoje"},{id:"semana",label:"7 dias"},{id:"mes",label:"30 dias"},{id:"tudo",label:"Tudo"},{id:"personalizado",label:"📅 Período"}].map(o=>(
+              <button key={o.id} onClick={()=>setFiltro(o.id)} style={{padding:"6px 14px",borderRadius:7,border:"none",background:filtro===o.id?"#1a3a2a":"transparent",color:filtro===o.id?"#7bc99a":"#888",cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .15s"}}>{o.label}</button>
+            ))}
+          </div>
+          {filtro==="personalizado"&&(
+            <div style={{display:"flex",gap:8,alignItems:"center",background:"#fff",border:"1px solid #e0ddd6",borderRadius:9,padding:"8px 12px"}}>
+              <span style={{fontSize:12,color:"#888"}}>De</span>
+              <input type="date" value={dataInicio} onChange={e=>setDataInicio(e.target.value)} max={dataFim||today()} style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"4px 8px",fontSize:12}} />
+              <span style={{fontSize:12,color:"#888"}}>até</span>
+              <input type="date" value={dataFim} onChange={e=>setDataFim(e.target.value)} max={today()} min={dataInicio} style={{border:"1px solid #e0ddd6",borderRadius:6,padding:"4px 8px",fontSize:12}} />
+            </div>
+          )}
         </div>
       </div>
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:"1.75rem"}}>
-        {[
-          {label:"Ensaios Realizados",val:totR, color:"#2eaa5f",bg:"#d4f5e0"},
-          {label:"Ainda Pendentes",   val:totP, color:"#f0b429",bg:"#fff3c4"},
-          {label:"Dias Analisados",   val:totD, color:"#185fa5",bg:"#e6f1fb"},
-          {label:"Média por Dia",     val:media,color:"#7b4fa6",bg:"#ede9fb"},
-        ].map(c=>(
+        {[{label:"Realizados",val:totR,color:"#2eaa5f",bg:"#d4f5e0"},{label:"Pendentes",val:totP,color:"#f0b429",bg:"#fff3c4"},{label:"Dias",val:totD,color:"#185fa5",bg:"#e6f1fb"},{label:"Média/Dia",val:media,color:"#7b4fa6",bg:"#ede9fb"}].map(c=>(
           <div key={c.label} style={{background:c.bg,borderRadius:12,padding:"14px 18px"}}>
             <div style={{fontSize:28,fontWeight:800,color:c.color,lineHeight:1}}>{c.val}</div>
             <div style={{fontSize:11,color:c.color,fontWeight:600,textTransform:"uppercase",letterSpacing:".05em",marginTop:4,opacity:.85}}>{c.label}</div>
           </div>
         ))}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:20,alignItems:"start"}}>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:20,alignItems:"start"}}>
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #e8e5de",padding:"1.5rem"}}>
           <h2 style={{margin:"0 0 1.25rem",fontSize:16,fontWeight:700,color:"#1a1a18"}}>Ranking de Ensaios</h2>
           <div style={{display:"grid",gap:10}}>
@@ -749,37 +1028,34 @@ function IndicadoresPage({ diaAtual, historico }) {
                     <span style={{fontSize:14,width:20,textAlign:"center"}}>{i<3?MEDAL[i]:<span style={{fontSize:12,color:"#bbb",fontWeight:700}}>#{i+1}</span>}</span>
                     <span style={{fontSize:13,fontWeight:600,color:"#2a2a28"}}>{e.label}</span>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div style={{display:"flex",gap:5}}>
-                      {e.realizados>0&&<span style={{fontSize:11,background:"#d4f5e0",color:"#1a6b3a",borderRadius:6,padding:"2px 8px",fontWeight:700}}>{e.realizados} ✓</span>}
-                      {e.andamento>0&&<span style={{fontSize:11,background:"#fff3c4",color:"#8a6800",borderRadius:6,padding:"2px 8px",fontWeight:700}}>{e.andamento} ⏳</span>}
-                      {e.pendentes>0&&<span style={{fontSize:11,background:"#f0eeea",color:"#888",borderRadius:6,padding:"2px 8px",fontWeight:700}}>{e.pendentes} ○</span>}
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{display:"flex",gap:4}}>
+                      {e.realizados>0&&<span style={{fontSize:11,background:"#d4f5e0",color:"#1a6b3a",borderRadius:6,padding:"2px 7px",fontWeight:700}}>{e.realizados} ✓</span>}
+                      {e.andamento>0&&<span style={{fontSize:11,background:"#fff3c4",color:"#8a6800",borderRadius:6,padding:"2px 7px",fontWeight:700}}>{e.andamento} ⏳</span>}
+                      {e.pendentes>0&&<span style={{fontSize:11,background:"#f0eeea",color:"#888",borderRadius:6,padding:"2px 7px",fontWeight:700}}>{e.pendentes} ○</span>}
                     </div>
-                    <span style={{fontSize:12,color:"#aaa",minWidth:36,textAlign:"right"}}>{e.pct}%</span>
+                    <span style={{fontSize:12,color:"#aaa",minWidth:34,textAlign:"right"}}>{e.pct}%</span>
                   </div>
                 </div>
                 <div style={{display:"flex",height:10,borderRadius:5,overflow:"hidden",background:"#f0eeea"}}>
-                  {e.realizados>0&&<div style={{width:(e.realizados/maxR*100)+"%",background:"#2eaa5f",transition:"width .6s ease",minWidth:4}} />}
-                  {e.andamento>0&&<div style={{width:(e.andamento/maxR*100)+"%",background:"#f0b429",transition:"width .6s ease",minWidth:4}} />}
-                  {e.pendentes>0&&<div style={{width:(e.pendentes/maxR*100)+"%",background:"#d0cec8",transition:"width .6s ease",minWidth:4}} />}
+                  {e.realizados>0&&<div style={{width:(e.realizados/maxR*100)+"%",background:"#2eaa5f",transition:"width .6s ease"}} />}
+                  {e.andamento>0&&<div style={{width:(e.andamento/maxR*100)+"%",background:"#f0b429",transition:"width .6s ease"}} />}
+                  {e.pendentes>0&&<div style={{width:(e.pendentes/maxR*100)+"%",background:"#d0cec8",transition:"width .6s ease"}} />}
                 </div>
               </div>
             ))}
           </div>
           <div style={{display:"flex",gap:16,marginTop:"1.25rem",paddingTop:"1rem",borderTop:"1px solid #f0eeea"}}>
             {[{color:"#2eaa5f",label:"Concluídos"},{color:"#f0b429",label:"Em andamento"},{color:"#d0cec8",label:"Pendentes"}].map(l=>(
-              <div key={l.label} style={{display:"flex",alignItems:"center",gap:5}}>
-                <div style={{width:10,height:10,borderRadius:2,background:l.color}} />
-                <span style={{fontSize:11,color:"#888"}}>{l.label}</span>
-              </div>
+              <div key={l.label} style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:10,height:10,borderRadius:2,background:l.color}} /><span style={{fontSize:11,color:"#888"}}>{l.label}</span></div>
             ))}
           </div>
         </div>
         <div style={{display:"grid",gap:16}}>
           {rankingFinal[0]?.realizados>0&&(
             <div style={{background:"#1a3a2a",borderRadius:14,padding:"1.25rem"}}>
-              <div style={{fontSize:11,color:"#7bc99a",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>🏆 Ensaio mais realizado</div>
-              <div style={{fontSize:17,fontWeight:800,color:"#fff",lineHeight:1.3,marginBottom:8}}>{rankingFinal[0].label}</div>
+              <div style={{fontSize:11,color:"#7bc99a",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>🏆 Mais realizado</div>
+              <div style={{fontSize:16,fontWeight:800,color:"#fff",lineHeight:1.3,marginBottom:8}}>{rankingFinal[0].label}</div>
               <div style={{fontSize:32,fontWeight:900,color:"#7bc99a",lineHeight:1}}>{rankingFinal[0].realizados}</div>
               <div style={{fontSize:12,color:"#5a9470",marginTop:2}}>execuções concluídas</div>
               <div style={{marginTop:12,height:4,background:"rgba(255,255,255,.1)",borderRadius:2,overflow:"hidden"}}>
@@ -788,155 +1064,78 @@ function IndicadoresPage({ diaAtual, historico }) {
               <div style={{fontSize:11,color:"#5a9470",marginTop:4}}>{rankingFinal[0].pct}% de conclusão</div>
             </div>
           )}
-          {rankingFinal.length>0&&(()=>{
-            const c=[...rankingFinal].sort((a,b)=>a.realizados-b.realizados).find(e=>e.total>0);
-            if(!c) return null;
-            return (
-              <div style={{background:"#fff8ed",borderRadius:14,border:"1px solid #fce0a0",padding:"1.25rem"}}>
-                <div style={{fontSize:11,color:"#b07d00",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>⚠️ Menos realizado</div>
-                <div style={{fontSize:15,fontWeight:700,color:"#5a3d00",marginBottom:4}}>{c.label}</div>
-                <div style={{fontSize:26,fontWeight:900,color:"#c9920a",lineHeight:1}}>{c.realizados}</div>
-                <div style={{fontSize:12,color:"#b07d00",marginTop:2}}>{c.pct}% de conclusão</div>
-              </div>
-            );
-          })()}
+          {(()=>{const c=[...rankingFinal].sort((a,b)=>a.realizados-b.realizados).find(e=>e.total>0);if(!c)return null;return(
+            <div style={{background:"#fff8ed",borderRadius:14,border:"1px solid #fce0a0",padding:"1.25rem"}}>
+              <div style={{fontSize:11,color:"#b07d00",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>⚠️ Menos realizado</div>
+              <div style={{fontSize:15,fontWeight:700,color:"#5a3d00",marginBottom:4}}>{c.label}</div>
+              <div style={{fontSize:26,fontWeight:900,color:"#c9920a",lineHeight:1}}>{c.realizados}</div>
+              <div style={{fontSize:12,color:"#b07d00",marginTop:2}}>{c.pct}% de conclusão</div>
+            </div>
+          );})()}
         </div>
       </div>
     </div>
   );
 }
 
-const ALLOWED_DOMAIN = "petropol.com.br";
-
 // ─── AuthPage ─────────────────────────────────────────────────────────────────
-function AuthPage({ onAuth }) {
-  const [mode, setMode]         = useState("login"); // login | cadastro | confirmado
-  const [nome, setNome]         = useState("");
-  const [email, setEmail]       = useState("");
-  const [senha, setSenha]       = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [erro, setErro]         = useState("");
+function AuthPage() {
+  const [aba, setAba] = useState("login");
+  const [nome, setNome] = useState("");
+  const [email, setEmail] = useState("");
+  const [senha, setSenha] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [erro, setErro] = useState("");
+  const [sucesso, setSucesso] = useState("");
 
-  function validarEmail(e) {
-    if (!e.endsWith(`@${ALLOWED_DOMAIN}`))
-      return `Apenas e-mails @${ALLOWED_DOMAIN} são permitidos.`;
-    return "";
-  }
-
-  async function handleLogin() {
-    setErro("");
-    const erroEmail = validarEmail(email);
-    if (erroEmail) { setErro(erroEmail); return; }
-    if (!senha) { setErro("Informe a senha."); return; }
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password: senha });
+  async function handleLogin(e) {
+    e.preventDefault(); setErro(""); setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({email, password:senha});
+    if (error) setErro("E-mail ou senha incorretos.");
     setLoading(false);
-    if (error) {
-      if (error.message.includes("Invalid login")) setErro("E-mail ou senha incorretos.");
-      else if (error.message.includes("Email not confirmed")) setErro("Confirme seu e-mail antes de entrar.");
-      else setErro(error.message);
-    }
-    // onAuth será chamado automaticamente pelo listener de sessão no App
   }
 
-  async function handleCadastro() {
-    setErro("");
-    if (!nome.trim()) { setErro("Informe seu nome."); return; }
-    const erroEmail = validarEmail(email);
-    if (erroEmail) { setErro(erroEmail); return; }
-    if (senha.length < 6) { setErro("A senha deve ter ao menos 6 caracteres."); return; }
+  async function handleCadastro(e) {
+    e.preventDefault(); setErro("");
+    if (!email.endsWith("@petropol.com.br")) { setErro("Acesso restrito ao domínio @petropol.com.br"); return; }
+    if (senha.length<6) { setErro("A senha deve ter no mínimo 6 caracteres."); return; }
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email, password: senha,
-      options: { data: { nome_completo: nome.trim() } },
-    });
+    const { error } = await supabase.auth.signUp({email, password:senha, options:{data:{full_name:nome}}});
+    if (error) setErro(typeof error.message==="string"?error.message:"Erro ao criar conta.");
+    else setSucesso("Conta criada! Verifique seu e-mail para confirmar.");
     setLoading(false);
-    if (error) { setErro(error.message); return; }
-    setMode("confirmado");
   }
-
-  if (mode === "confirmado") return (
-    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,sans-serif"}}>
-      <div style={{background:"#fff",borderRadius:20,padding:"2.5rem",width:"min(420px,92vw)",textAlign:"center",boxShadow:"0 20px 60px rgba(0,0,0,.1)"}}>
-        <div style={{width:56,height:56,borderRadius:28,background:"#d4f5e0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 1.25rem"}}>✉️</div>
-        <h2 style={{margin:"0 0 .75rem",fontSize:20,fontWeight:800,color:"#1a1a18"}}>Confirme seu e-mail</h2>
-        <p style={{color:"#666",fontSize:14,lineHeight:1.7,margin:"0 0 1.5rem"}}>
-          Enviamos um link de confirmação para<br/>
-          <strong style={{color:"#1a3a2a"}}>{email}</strong><br/>
-          Acesse seu e-mail e clique no link para ativar sua conta.
-        </p>
-        <button onClick={()=>setMode("login")} style={{padding:"10px 24px",borderRadius:9,border:"1px solid #e0ddd6",background:"transparent",cursor:"pointer",fontSize:13,color:"#666"}}>
-          Voltar ao login
-        </button>
-      </div>
-    </div>
-  );
 
   return (
-    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,-apple-system,sans-serif"}}>
-      <div style={{background:"#fff",borderRadius:20,padding:"2.5rem",width:"min(420px,92vw)",boxShadow:"0 20px 60px rgba(0,0,0,.1)"}}>
-
-        {/* Logo */}
+    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"2.5rem",width:"min(440px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.10)"}}>
         <div style={{textAlign:"center",marginBottom:"2rem"}}>
-          <div style={{fontSize:28,fontWeight:900,color:"#1a3a2a",letterSpacing:"-.02em",marginBottom:4}}>
+          <div style={{fontSize:28,fontWeight:900,color:"#1a1a18",letterSpacing:"-.02em",marginBottom:4}}>
             <span style={{color:"#2eaa5f"}}>Lab</span>Quality
           </div>
-          <div style={{fontSize:12,color:"#aaa",letterSpacing:".06em",textTransform:"uppercase"}}>Controle de Validações · Petropol</div>
+          <div style={{fontSize:12,color:"#aaa",letterSpacing:".1em",textTransform:"uppercase"}}>Controle de Validações · Petropol</div>
         </div>
-
-        {/* Tabs */}
-        <div style={{display:"flex",background:"#f0eeea",borderRadius:10,padding:4,marginBottom:"1.5rem"}}>
-          {[{id:"login",label:"Entrar"},{id:"cadastro",label:"Cadastrar"}].map(t=>(
-            <button key={t.id} onClick={()=>{setMode(t.id);setErro("");}} style={{flex:1,padding:"8px",borderRadius:7,border:"none",background:mode===t.id?"#1a3a2a":"transparent",color:mode===t.id?"#7bc99a":"#888",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .15s"}}>
-              {t.label}
-            </button>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",background:"#f5f3ef",borderRadius:10,padding:4,marginBottom:"1.75rem"}}>
+          {[{id:"login",label:"Entrar"},{id:"cadastro",label:"Cadastrar"}].map(a=>(
+            <button key={a.id} onClick={()=>{setAba(a.id);setErro("");setSucesso("");}} style={{padding:"9px",borderRadius:7,border:"none",background:aba===a.id?"#1a3a2a":"transparent",color:aba===a.id?"#7bc99a":"#888",cursor:"pointer",fontSize:13,fontWeight:600,transition:"all .15s"}}>{a.label}</button>
           ))}
         </div>
-
-        {/* Campos */}
-        <div style={{display:"grid",gap:12}}>
-          {mode==="cadastro" && (
-            <div>
-              <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome completo</label>
-              <input value={nome} onChange={e=>setNome(e.target.value)} placeholder="ex: Ana Paula Silva"
-                style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
-                onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"} />
-            </div>
+        <form onSubmit={aba==="login"?handleLogin:handleCadastro} style={{display:"grid",gap:14}}>
+          {aba==="cadastro"&&(
+            <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Nome Completo</label>
+              <input value={nome} onChange={e=>setNome(e.target.value)} required placeholder="Seu nome completo" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"10px 12px",fontSize:13,boxSizing:"border-box"}} /></div>
           )}
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>E-mail corporativo</label>
-            <input value={email} onChange={e=>setEmail(e.target.value)} placeholder={`nome@${ALLOWED_DOMAIN}`} type="email"
-              style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
-              onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"} />
-          </div>
-          <div>
-            <label style={{fontSize:11,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Senha</label>
-            <input value={senha} onChange={e=>setSenha(e.target.value)} type="password"
-              placeholder={mode==="cadastro"?"Mínimo 6 caracteres":"Sua senha"}
-              style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:9,padding:"10px 12px",fontSize:14,boxSizing:"border-box",outline:"none"}}
-              onFocus={e=>e.target.style.borderColor="#1a3a2a"} onBlur={e=>e.target.style.borderColor="#e0ddd6"}
-              onKeyDown={e=>e.key==="Enter"&&(mode==="login"?handleLogin():handleCadastro())} />
-          </div>
-        </div>
-
-        {/* Erro */}
-        {erro && (
-          <div style={{marginTop:12,background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#dc2626"}}>
-            {erro}
-          </div>
-        )}
-
-        {/* Botão */}
-        <button
-          onClick={mode==="login"?handleLogin:handleCadastro}
-          disabled={loading}
-          style={{width:"100%",marginTop:20,padding:"12px",borderRadius:9,border:"none",background:loading?"#ccc":"#1a3a2a",color:"#fff",cursor:loading?"default":"pointer",fontSize:14,fontWeight:700,transition:"background .15s"}}>
-          {loading ? "Aguarde..." : mode==="login" ? "Entrar" : "Criar conta"}
-        </button>
-
-        <p style={{textAlign:"center",fontSize:12,color:"#bbb",marginTop:"1.25rem",marginBottom:0}}>
-          Acesso restrito a <strong>@{ALLOWED_DOMAIN}</strong>
-        </p>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>E-mail Corporativo</label>
+            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} required placeholder="nome@petropol.com.br" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"10px 12px",fontSize:13,boxSizing:"border-box"}} /></div>
+          <div><label style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:".06em",display:"block",marginBottom:4}}>Senha</label>
+            <input type="password" value={senha} onChange={e=>setSenha(e.target.value)} required placeholder="••••••••" style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"10px 12px",fontSize:13,boxSizing:"border-box"}} /></div>
+          {erro&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#dc2626"}}>{erro}</div>}
+          {sucesso&&<div style={{background:"#d4f5e0",border:"1px solid #86d9a8",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#1a6b3a"}}>{sucesso}</div>}
+          <button type="submit" disabled={loading} style={{padding:"12px",borderRadius:9,border:"none",background:loading?"#ccc":"#1a3a2a",color:"#fff",cursor:loading?"default":"pointer",fontSize:14,fontWeight:700,marginTop:4}}>
+            {loading?"Aguarde...":(aba==="login"?"Entrar":"Criar conta")}
+          </button>
+        </form>
+        <p style={{textAlign:"center",fontSize:12,color:"#bbb",marginTop:"1.5rem",marginBottom:0}}>Acesso restrito a <strong style={{color:"#888"}}>@petropol.com.br</strong></p>
       </div>
     </div>
   );
@@ -945,157 +1144,125 @@ function AuthPage({ onAuth }) {
 // ─── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage]           = useState("dashboard");
-  const [session, setSession]     = useState(undefined); // undefined=carregando, null=sem auth
+  const [session, setSession]     = useState(undefined);
   const [dia, setDia]             = useState(null);
   const [historico, setHistorico] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [toast, setToast]         = useState(null);
 
-  // Primeiro nome do usuário logado
-  const primeiroNome = session?.user?.user_metadata?.nome_completo?.split(" ")[0]
-    || session?.user?.email?.split("@")[0]
-    || "";
+  const primeiroNome = session?.user?.user_metadata?.full_name?.split(" ")[0] || session?.user?.email?.split("@")[0] || "";
 
-  function showToast(msg, type="success") {
-    setToast({msg, type});
-    setTimeout(()=>setToast(null), 3500);
-  }
+  function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),3500); }
 
-  // Listener de sessão — roda uma vez, escuta mudanças de auth
+  // Auth listener
   useEffect(()=>{
-    supabase.auth.getSession().then(({ data: { session } })=>{
-      setSession(session ?? null);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session)=>{
-      setSession(session ?? null);
-    });
-    return () => subscription.unsubscribe();
-  }, []);
+    supabase.auth.getSession().then(({data:{session}})=>setSession(session??null));
+    const {data:{subscription}} = supabase.auth.onAuthStateChange((_,session)=>setSession(session??null));
+    return ()=>subscription.unsubscribe();
+  },[]);
 
-  // Carrega dados quando há sessão ativa
+  // Carrega dados ao logar
   useEffect(()=>{
-    if (!session) { setLoading(false); return; }
+    if (!session) return;
     async function init() {
-      try {
-        setLoading(true);
-        const [diaData, histData] = await Promise.all([
-          fetchOrCreateToday(),
-          fetchHistorico(),
-        ]);
-        setDia(diaData);
-        setHistorico(histData);
-      } catch(e) {
-        console.error(e);
-        showToast("Erro ao conectar com o banco de dados.", "error");
-      } finally {
-        setLoading(false);
-      }
+      try { setLoading(true); const [d,h]=await Promise.all([fetchDiaByDate(today()),fetchHistorico()]); setDia(d); setHistorico(h); }
+      catch(e) { console.error(e); showToast("Erro ao conectar com o banco.","error"); }
+      finally { setLoading(false); }
     }
     init();
-  }, [session]);
+  },[session]);
 
-  async function handleUpdateCell(matId, ensaioId, data) {
-    // Atualiza UI imediatamente (otimista)
-    setDia(prev=>({...prev, materiais:prev.materiais.map(m=>
-      m.id!==matId ? m : {...m, cells:{...m.cells,[ensaioId]:{...m.cells[ensaioId],...data}}}
-    )}));
+  async function handleDateChange(dateStr) {
     try {
-      await dbUpdateCell(matId, ensaioId, data);
-    } catch(e) {
-      showToast("Erro ao salvar ensaio.", "error");
-    }
+      setLoading(true);
+      const d = await fetchDiaByDate(dateStr);
+      setDia(d);
+    } catch(e) { showToast("Erro ao carregar o dia.","error"); }
+    finally { setLoading(false); }
+  }
+
+  async function handleUpdateCell(matId,ensaioId,data) {
+    setDia(prev=>({...prev,materiais:prev.materiais.map(m=>m.id!==matId?m:{...m,cells:{...m.cells,[ensaioId]:{...m.cells[ensaioId],...data}}})}));
+    try { await dbUpdateCell(matId,ensaioId,data); }
+    catch(e) { showToast("Erro ao salvar ensaio.","error"); }
   }
 
   async function handleAddMaterial(mat) {
-    try {
-      const ordem = dia.materiais.length;
-      const matSalvo = await dbAddMaterial(dia.id, mat, ordem);
-      setDia(prev=>({...prev, materiais:[...prev.materiais, matSalvo]}));
-      showToast(`Material ${matSalvo.codigo} adicionado.`);
-    } catch(e) {
-      showToast("Erro ao adicionar material.", "error");
-    }
+    try { const m=await dbAddMaterial(dia.id,mat,dia.materiais.length); setDia(prev=>({...prev,materiais:[...prev.materiais,m]})); showToast(`Material ${m.codigo} adicionado.`); }
+    catch(e) { showToast("Erro ao adicionar material.","error"); }
   }
 
   async function handleEditMaterial(mat) {
-    setDia(prev=>({...prev, materiais:prev.materiais.map(m=>m.id===mat.id?mat:m)}));
-    try {
-      await dbEditMaterial(mat);
-      showToast("Material atualizado.");
-    } catch(e) {
-      showToast("Erro ao editar material.", "error");
-    }
+    setDia(prev=>({...prev,materiais:prev.materiais.map(m=>m.id===mat.id?mat:m)}));
+    try { await dbEditMaterial(mat); showToast("Material atualizado."); }
+    catch(e) { showToast("Erro ao editar.","error"); }
   }
 
   async function handleRemoveMaterial(id) {
-    setDia(prev=>({...prev, materiais:prev.materiais.filter(m=>m.id!==id)}));
-    try {
-      await dbRemoveMaterial(id);
-      showToast("Material removido.");
-    } catch(e) {
-      showToast("Erro ao remover material.", "error");
-    }
+    setDia(prev=>({...prev,materiais:prev.materiais.filter(m=>m.id!==id)}));
+    try { await dbRemoveMaterial(id); showToast("Material removido."); }
+    catch(e) { showToast("Erro ao remover.","error"); }
   }
 
   async function handleLimparDashboard() {
-    const backup = dia.materiais;
-    setDia(prev=>({...prev, materiais:[]}));
+    const bk=dia.materiais;
+    setDia(prev=>({...prev,materiais:[]}));
+    try { await dbLimparDia(dia.id); showToast("Dashboard limpo."); }
+    catch(e) { setDia(prev=>({...prev,materiais:bk})); showToast("Erro ao limpar.","error"); }
+  }
+
+  async function handleFinalizarTurno(numTurno, texto, itens) {
     try {
-      await dbLimparDia(dia.id);
-      showToast("Dashboard limpo.");
-    } catch(e) {
-      setDia(prev=>({...prev, materiais:backup}));
-      showToast("Erro ao limpar dashboard.", "error");
-    }
+      const turnoRow = await dbFinalizarTurno(dia.id, numTurno, texto, itens);
+      // Busca ocorrências salvas
+      const { data:ocs } = await supabase.from("ocorrencias").select("*").eq("turno_id",turnoRow.id).order("created_at");
+      setDia(prev=>({
+        ...prev,
+        turnos: [...(prev.turnos||[]).filter(t=>t.numero!==numTurno), turnoRow],
+        ocorrencias: [...(prev.ocorrencias||[]).filter(o=>o.turno_id!==turnoRow.id), ...(ocs||[])],
+      }));
+      const t = TURNOS.find(t=>t.id===numTurno);
+      showToast(`${t.label} finalizado! ✓`);
+    } catch(e) { showToast("Erro ao finalizar turno.","error"); }
   }
 
   async function handleFinalizarDia() {
     try {
-      const novoDia = await dbFinalizarDia(dia.id);
-      setHistorico(prev=>[{...dia, finalizado:true}, ...prev]);
+      const { error } = await supabase.from("dias").update({finalizado:true}).eq("id",dia.id);
+      if (error) throw error;
+      setHistorico(prev=>[{...dia,finalizado:true},...prev]);
+      const novoDia = await fetchDiaByDate(today());
       setDia(novoDia);
       showToast("Dia finalizado e salvo no histórico! ✓");
-    } catch(e) {
-      showToast("Erro ao finalizar o dia.", "error");
-    }
+    } catch(e) { showToast("Erro ao finalizar o dia.","error"); }
   }
 
   async function handleReopenDia(diaHist) {
     try {
-      // Marca o dia do histórico como não finalizado no banco
-      const { error } = await supabase.from("dias").update({ finalizado: false }).eq("id", diaHist.id);
+      const { error } = await supabase.from("dias").update({finalizado:false}).eq("id",diaHist.id);
       if (error) throw error;
-      // Remove do histórico local e coloca como dia ativo
-      setHistorico(prev => prev.filter(h => h.id !== diaHist.id));
-      setDia({ ...diaHist, finalizado: false });
+      setHistorico(prev=>prev.filter(h=>h.id!==diaHist.id));
+      setDia({...diaHist,finalizado:false});
       setPage("dashboard");
       showToast(`Dia ${fmtDate(diaHist.date)} reaberto para edição.`);
-    } catch(e) {
-      showToast("Erro ao reabrir o dia.", "error");
-    }
+    } catch(e) { showToast("Erro ao reabrir o dia.","error"); }
   }
 
-  const NAV = [
-    {id:"dashboard",   label:"Dashboard",  icon:"📊"},
-    {id:"indicadores", label:"Indicadores",icon:"📈"},
-    {id:"historico",   label:"Histórico",  icon:"📁"},
-  ];
+  const NAV=[{id:"dashboard",label:"Dashboard",icon:"📊"},{id:"indicadores",label:"Indicadores",icon:"📈"},{id:"historico",label:"Histórico",icon:"📁"}];
+  const progress = dia?calcProgress(dia.materiais):{pct:0};
+  const turnosFinalizados = (dia?.turnos||[]).filter(t=>t.finalizado).map(t=>t.numero);
+  const turnoAtual = getTurnoAtual(turnosFinalizados);
 
-  const progress = dia ? calcProgress(dia.materiais) : {pct:0};
-
-  // session === undefined → ainda verificando auth (splash)
-  // session === null     → sem login → mostra AuthPage
-  // session === object   → logado → mostra app
-  if (session === undefined) return (
+  if (session===undefined) return (
     <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
       <div style={{fontSize:32}}>🧪</div>
       <div style={{fontSize:16,fontWeight:600,color:"#1a3a2a"}}>Carregando LabQuality...</div>
     </div>
   );
 
-  if (session === null) return <AuthPage />;
+  if (session===null) return <AuthPage />;
 
-  if (loading) return (
+  if (loading&&!dia) return (
     <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
       <div style={{fontSize:32}}>🧪</div>
       <div style={{fontSize:16,fontWeight:600,color:"#1a3a2a"}}>Carregando LabQuality...</div>
@@ -1107,9 +1274,7 @@ export default function App() {
     <div style={{minHeight:"100vh",background:"#f5f3ef",fontFamily:"system-ui,-apple-system,sans-serif"}}>
       <div style={{background:"#1a3a2a",borderBottom:"1px solid #2d5c42",padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",height:56,position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",gap:16}}>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff",letterSpacing:"-.02em"}}>
-            <span style={{color:"#7bc99a"}}>Lab</span>Quality
-          </div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",letterSpacing:"-.02em"}}><span style={{color:"#7bc99a"}}>Lab</span>Quality</div>
           <div style={{width:1,height:20,background:"#2d5c42"}} />
           <nav style={{display:"flex",gap:2}}>
             {NAV.map(n=>(
@@ -1119,43 +1284,27 @@ export default function App() {
             ))}
           </nav>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:16}}>
-          {dia&&!dia.finalizado&&(
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div style={{width:80,height:4,background:"rgba(255,255,255,.15)",borderRadius:2,overflow:"hidden"}}>
-                <div style={{height:"100%",width:progress.pct+"%",background:"#7bc99a",borderRadius:2,transition:"width .4s"}} />
-              </div>
-              <span style={{fontSize:12,color:"#7bc99a",fontWeight:600}}>{progress.pct}%</span>
-            </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          {dia&&!dia.finalizado&&dia.date===today()&&(
+            <TurnoBadge turnoAtual={turnoAtual} turnosFinalizados={turnosFinalizados} />
           )}
-          <div style={{fontSize:12,color:"#7bc99a"}}>{fmtDate(today())}</div>
-          {dia?.finalizado&&<span style={{background:"rgba(123,201,154,.2)",color:"#7bc99a",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>DIA FINALIZADO</span>}
-          <div style={{width:1,height:20,background:"#2d5c42"}} />
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div style={{width:28,height:28,borderRadius:14,background:"rgba(123,201,154,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#7bc99a"}}>
-                {primeiroNome.slice(0,2).toUpperCase()}
-              </div>
-              <span style={{fontSize:13,color:"#7bc99a",fontWeight:600}}>{primeiroNome}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{width:28,height:28,borderRadius:14,background:"rgba(123,201,154,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#7bc99a"}}>
+              {primeiroNome.slice(0,2).toUpperCase()}
             </div>
-            <button
-              onClick={()=>supabase.auth.signOut()}
-              title="Sair"
-              style={{padding:"5px 12px",borderRadius:7,border:"1px solid rgba(123,201,154,.3)",background:"transparent",color:"#7bc99a",cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .15s"}}
-              onMouseEnter={e=>{e.currentTarget.style.background="rgba(123,201,154,.15)";}}
-              onMouseLeave={e=>{e.currentTarget.style.background="transparent";}}>
-              Sair
-            </button>
+            <span style={{fontSize:13,color:"#7bc99a",fontWeight:600}}>{primeiroNome}</span>
           </div>
+          <button onClick={()=>supabase.auth.signOut()} style={{padding:"5px 12px",borderRadius:7,border:"1px solid rgba(123,201,154,.3)",background:"transparent",color:"#7bc99a",cursor:"pointer",fontSize:12,fontWeight:600}}
+            onMouseEnter={e=>e.currentTarget.style.background="rgba(123,201,154,.15)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>Sair</button>
         </div>
       </div>
 
       <main style={{maxWidth:1400,margin:"0 auto",padding:"2rem 24px"}}>
         <Legend />
         {page==="dashboard"&&dia&&(
-          <DashboardPage dia={dia} onFinalizarDia={handleFinalizarDia} onAddMaterial={handleAddMaterial}
-            onUpdateCell={handleUpdateCell} onEditMaterial={handleEditMaterial}
-            onRemoveMaterial={handleRemoveMaterial} onLimparDashboard={handleLimparDashboard} />
+          <DashboardPage dia={dia} onFinalizarDia={handleFinalizarDia} onFinalizarTurno={handleFinalizarTurno}
+            onAddMaterial={handleAddMaterial} onUpdateCell={handleUpdateCell} onEditMaterial={handleEditMaterial}
+            onRemoveMaterial={handleRemoveMaterial} onLimparDashboard={handleLimparDashboard} onDateChange={handleDateChange} />
         )}
         {page==="indicadores"&&dia&&<IndicadoresPage diaAtual={dia} historico={historico} />}
         {page==="historico"&&<HistoricoPage historico={historico} loading={loading} onReopenDia={handleReopenDia} />}
