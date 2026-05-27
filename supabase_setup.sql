@@ -90,3 +90,28 @@ alter table ocorrencias enable row level security;
 
 create policy "acesso_total_turnos"      on turnos      for all using (true) with check (true);
 create policy "acesso_total_ocorrencias" on ocorrencias for all using (true) with check (true);
+
+
+-- ============================================================
+-- ATUALIZAÇÃO v3 — Sistema de turnos simplificado
+-- Execute no SQL Editor do Supabase
+-- ============================================================
+
+-- Adiciona coluna turno_ativo na tabela dias (se não existir)
+alter table dias add column if not exists turno_ativo integer default 1;
+
+-- Nova tabela: anotação por turno (simples, texto livre)
+create table if not exists turno_anotacoes (
+  id          uuid primary key default gen_random_uuid(),
+  dia_id      uuid not null references dias(id) on delete cascade,
+  turno_num   integer not null,   -- 1, 2 ou 3
+  texto       text not null default '',
+  finalizado  boolean not null default false,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now(),
+  unique(dia_id, turno_num)
+);
+
+create index if not exists idx_turno_anotacoes_dia on turno_anotacoes(dia_id);
+alter table turno_anotacoes enable row level security;
+create policy "acesso_total_turno_anotacoes" on turno_anotacoes for all using (true) with check (true);
