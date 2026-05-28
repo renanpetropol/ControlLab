@@ -1048,7 +1048,6 @@ export default function App() {
       {toast&&<Toast msg={toast.msg} type={toast.type} />}
     </div>
   );
-}
 
   // Handlers
   async function handleUpdateCell(matId, ensaioId, data) {
@@ -1234,3 +1233,4 @@ export default function App() {
       {toast&&<Toast msg={toast.msg} type={toast.type} />}
     </div>
   );
+}
