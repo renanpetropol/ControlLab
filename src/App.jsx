@@ -33,10 +33,7 @@ const STATUS_CONFIG = {
 };
 
 function makeCell(status="pendente", operador=null, hora=null) { return {status,operador,hora}; }
-// Data atual no fuso de Brasília (UTC-3) — evita virar o dia às 21h no servidor
-function today() {
-  return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
-}
+function today() { return new Date().toISOString().split("T")[0]; }
 function fmtDate(d) { if(!d) return ""; const [y,m,dd]=d.split("-"); return `${dd}/${m}/${y}`; }
 
 function calcProgress(materiais) {
@@ -423,48 +420,34 @@ function StatsBar({ progress }) {
 }
 
 // ─── AnotacoesTurnos ──────────────────────────────────────────────────────────
-function AnotacoesTurnos({ anotacoes, turnoAtivo, readonly, onChange, onChangeTurnoAtivo }) {
+function AnotacoesTurnos({ anotacoes, turnoAtivo, readonly, onChange }) {
+  // anotacoes: [{turno_num, texto, finalizado}]
   return (
     <div style={{marginTop:"1.75rem",display:"grid",gap:12}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-        <h3 style={{margin:0,fontSize:15,fontWeight:700,color:"#1a1a18"}}>Anotações por Turno</h3>
-        {!readonly&&(
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <span style={{fontSize:12,color:"#888"}}>Turno ativo:</span>
-            <div style={{display:"flex",gap:4}}>
-              {TURNOS.map(t=>(
-                <button key={t.id} onClick={()=>onChangeTurnoAtivo(t.id)}
-                  style={{padding:"4px 12px",borderRadius:6,border:`1.5px solid ${turnoAtivo===t.id?t.dot:"#e0ddd6"}`,background:turnoAtivo===t.id?t.bg:"transparent",color:turnoAtivo===t.id?t.color:"#888",cursor:"pointer",fontSize:12,fontWeight:600,transition:"all .15s"}}>
-                  {t.id}º
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <h3 style={{margin:0,fontSize:15,fontWeight:700,color:"#1a1a18"}}>Anotações por Turno</h3>
       {TURNOS.map(t => {
         const anot = anotacoes.find(a=>a.turno_num===t.id)||{turno_num:t.id,texto:"",finalizado:false};
         const isAtivo = t.id===turnoAtivo;
         const editavel = !readonly && isAtivo && !anot.finalizado;
         return (
-          <div key={t.id} style={{background:"#fff",borderRadius:12,border:`1.5px solid ${isAtivo&&!anot.finalizado&&!readonly?"#e8e5de":anot.finalizado?"#86d9a8":"#e8e5de"}`,padding:"1rem 1.25rem"}}>
+          <div key={t.id} style={{background:"#fff",borderRadius:12,border:`1.5px solid ${isAtivo&&!anot.finalizado?"#e8e5de":anot.finalizado?"#86d9a8":"#e8e5de"}`,padding:"1rem 1.25rem"}}>
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:"0.75rem"}}>
               <div style={{width:8,height:8,borderRadius:4,background:t.dot}} />
               <span style={{fontWeight:700,fontSize:13,color:"#1a1a18"}}>{t.label}</span>
               <span style={{fontSize:11,color:t.color,background:t.bg,padding:"2px 8px",borderRadius:8,fontWeight:600}}>{t.inicio} – {t.fim}</span>
               {anot.finalizado&&<span style={{fontSize:11,color:"#1a6b3a",background:"#d4f5e0",padding:"2px 8px",borderRadius:8,fontWeight:700,marginLeft:"auto"}}>✓ Finalizado</span>}
-              {isAtivo&&!anot.finalizado&&!readonly&&<span style={{fontSize:11,color:t.color,background:t.bg,padding:"2px 8px",borderRadius:8,fontWeight:700,marginLeft:"auto"}}>● Ativo</span>}
+              {isAtivo&&!anot.finalizado&&!readonly&&<span style={{fontSize:11,color:t.color,background:t.bg,padding:"2px 8px",borderRadius:8,fontWeight:700,marginLeft:"auto"}}>● Turno Ativo</span>}
             </div>
             {editavel ? (
               <textarea
                 value={anot.texto}
                 onChange={e=>onChange(t.id, e.target.value)}
-                placeholder={`Anotações do ${t.label}... (ocorrências, observações, etc.)`}
+                placeholder={`Anotações do ${t.label}... (ocorrências, observações, equipamentos, etc.)`}
                 rows={3}
                 style={{width:"100%",border:"1px solid #e0ddd6",borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box",resize:"vertical",fontFamily:"inherit",lineHeight:1.5}}
               />
             ) : (
-              <div style={{fontSize:13,color:anot.texto?"#444":"#bbb",lineHeight:1.6,minHeight:36,fontStyle:anot.texto?"normal":"italic",whiteSpace:"pre-wrap"}}>
+              <div style={{fontSize:13,color:anot.texto?"#444":"#bbb",lineHeight:1.6,minHeight:36,fontStyle:anot.texto?"normal":"italic"}}>
                 {anot.texto||"Nenhuma anotação registrada."}
               </div>
             )}
@@ -495,7 +478,7 @@ function Legend() {
 }
 
 // ─── DashboardPage ────────────────────────────────────────────────────────────
-function DashboardPage({ dia, onFinalizarTurno, onFinalizarDia, onAddMaterial, onUpdateCell, onEditMaterial, onRemoveMaterial, onLimparDashboard, onAnotacaoChange, onChangeDia, onChangeTurnoAtivo }) {
+function DashboardPage({ dia, onFinalizarTurno, onFinalizarDia, onAddMaterial, onUpdateCell, onEditMaterial, onRemoveMaterial, onLimparDashboard, onAnotacaoChange, onChangeDia }) {
   const [showAdd, setShowAdd]             = useState(false);
   const [showFinalizarTurno, setShowFT]   = useState(false);
   const [showFinalizar, setShowFinalizar] = useState(false);
@@ -556,7 +539,6 @@ function DashboardPage({ dia, onFinalizarTurno, onFinalizarDia, onAddMaterial, o
         turnoAtivo={dia.turnoAtivo}
         readonly={dia.finalizado}
         onChange={onAnotacaoChange}
-        onChangeTurnoAtivo={onChangeTurnoAtivo}
       />
 
       {/* Modais */}
@@ -820,72 +802,90 @@ function IndicadoresPage({ diaAtual, historico }) {
             <div style={{background:"#1a3a2a",borderRadius:14,padding:"1.25rem"}}>
               <div style={{fontSize:11,color:"#7bc99a",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>🏆 Mais realizado</div>
               <div style={{fontSize:16,fontWeight:800,color:"#fff",lineHeight:1.3,marginBottom:8}}>{ranking[0].label}</div>
+              <div style={{fontSize:32,fontWeight:900,color:"#7bc99a",lineHeight:1}}>{ranking[0].realizados}</div>
+              <div style={{fontSize:12,color:"#5a9470",marginTop:2}}>execuções · {ranking[0].pct}% de conclusão</div>
+            </div>
+          )}
+          {(()=>{const c=[...ranking].sort((a,b)=>a.realizados-b.realizados).find(e=>e.total>0);if(!c)return null;return(
+            <div style={{background:"#fff8ed",borderRadius:14,border:"1px solid #fce0a0",padding:"1.25rem"}}>
+              <div style={{fontSize:11,color:"#b07d00",fontWeight:600,textTransform:"uppercase",letterSpacing:".07em",marginBottom:6}}>⚠️ Menos realizado</div>
+              <div style={{fontSize:15,fontWeight:700,color:"#5a3d00",marginBottom:4}}>{c.label}</div>
+              <div style={{fontSize:26,fontWeight:900,color:"#c9920a",lineHeight:1}}>{c.realizados}</div>
+              <div style={{fontSize:12,color:"#b07d00",marginTop:2}}>{c.pct}% de conclusão</div>
+            </div>
+          );})()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage]           = useState("dashboard");
   const [session, setSession]     = useState(undefined);
   const [dia, setDia]             = useState(null);
   const [historico, setHistorico] = useState([]);
-  const [initialLoad, setInitialLoad] = useState(true);
+  const [loading, setLoading]     = useState(true);
   const [toast, setToast]         = useState(null);
-  const dataLoadedRef             = useRef(false);
 
   function showToast(msg, type="success") { setToast({msg,type}); setTimeout(()=>setToast(null),3500); }
 
+  // Auth
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session:s}})=>setSession(s??null));
-    const {data:{subscription}} = supabase.auth.onAuthStateChange((event,s)=>{
-      if (event==="TOKEN_REFRESHED"||event==="INITIAL_SESSION") return;
-      setSession(s??null);
-    });
+    supabase.auth.getSession().then(({data:{session}})=>setSession(session??null));
+    const {data:{subscription}} = supabase.auth.onAuthStateChange((_,s)=>setSession(s??null));
     return ()=>subscription.unsubscribe();
   },[]);
 
-  const userId = session?.user?.id;
+  // Load data when logged in
   useEffect(()=>{
-    if (!userId) return;
-    if (dataLoadedRef.current) return;
-    dataLoadedRef.current = true;
+    if (!session) return;
     async function init() {
       try {
-        const [diaData,histData] = await Promise.all([fetchDiaByDate(today()),fetchHistorico()]);
+        setLoading(true);
+        const [diaData, histData] = await Promise.all([fetchDiaByDate(today()), fetchHistorico()]);
         setDia(diaData); setHistorico(histData);
       } catch(e) { showToast("Erro ao conectar com o banco de dados.","error"); }
-      finally { setInitialLoad(false); }
+      finally { setLoading(false); }
     }
     init();
-  },[userId]);
-
-  useEffect(()=>{
-    if (session===null) { dataLoadedRef.current=false; setDia(null); setHistorico([]); setInitialLoad(true); }
   },[session]);
 
+  // Handlers
   async function handleUpdateCell(matId, ensaioId, data) {
-    let extraUpdates=[];
-    if (ensaioId==="injecao"&&data.status==="concluido") {
-      const mat=dia.materiais.find(m=>m.id===matId);
-      if (mat) extraUpdates=ENSAIOS_DEFAULT.filter(e=>e.id!=="injecao"&&mat.cells[e.id]?.status==="pendente").map(e=>({ensaioId:e.id,data:{status:"andamento",operador:null,hora:null}}));
+    // Se marcou Injeção como concluído, avança todos pendentes para andamento
+    let extraUpdates = [];
+    if (ensaioId==="injecao" && data.status==="concluido") {
+      const mat = dia.materiais.find(m=>m.id===matId);
+      if (mat) {
+        extraUpdates = ENSAIOS_DEFAULT
+          .filter(e => e.id!=="injecao" && mat.cells[e.id]?.status==="pendente")
+          .map(e => ({ensaioId:e.id, data:{status:"andamento",operador:null,hora:null}}));
+      }
     }
-    setDia(prev=>({...prev,materiais:prev.materiais.map(m=>{
+    setDia(prev=>({...prev, materiais:prev.materiais.map(m=>{
       if (m.id!==matId) return m;
-      let nc={...m.cells,[ensaioId]:{...m.cells[ensaioId],...data}};
-      extraUpdates.forEach(u=>{nc[u.ensaioId]={...nc[u.ensaioId],...u.data};});
-      return {...m,cells:nc};
+      let newCells = {...m.cells, [ensaioId]:{...m.cells[ensaioId],...data}};
+      extraUpdates.forEach(u=>{ newCells[u.ensaioId]={...newCells[u.ensaioId],...u.data}; });
+      return {...m, cells:newCells};
     })}));
     try {
       await supabase.from("ensaios").update({status:data.status,operador:data.operador,hora:data.hora,updated_at:new Date().toISOString()}).eq("material_id",matId).eq("ensaio_id",ensaioId);
-      for (const u of extraUpdates) await supabase.from("ensaios").update({status:u.data.status,operador:null,hora:null,updated_at:new Date().toISOString()}).eq("material_id",matId).eq("ensaio_id",u.ensaioId);
+      for (const u of extraUpdates) {
+        await supabase.from("ensaios").update({status:u.data.status,operador:null,hora:null,updated_at:new Date().toISOString()}).eq("material_id",matId).eq("ensaio_id",u.ensaioId);
+      }
     } catch(e) { showToast("Erro ao salvar ensaio.","error"); }
   }
 
   async function handleAddMaterial(mat) {
     try {
-      const ordem=dia.materiais.length;
-      const {data:matRow,error}=await supabase.from("materiais").insert({dia_id:dia.id,codigo:mat.codigo,resina:mat.resina,nome:mat.codigo,ordem}).select().single();
+      const ordem = dia.materiais.length;
+      const { data:matRow, error } = await supabase.from("materiais").insert({dia_id:dia.id,codigo:mat.codigo,resina:mat.resina,nome:mat.codigo,ordem}).select().single();
       if (error) throw error;
-      const ins=ENSAIOS_DEFAULT.map(e=>({material_id:matRow.id,ensaio_id:e.id,status:mat.cells[e.id]?.status||"na",operador:null,hora:null}));
+      const ins = ENSAIOS_DEFAULT.map(e=>({material_id:matRow.id,ensaio_id:e.id,status:mat.cells[e.id]?.status||"na",operador:null,hora:null}));
       await supabase.from("ensaios").insert(ins);
-      setDia(prev=>({...prev,materiais:[...prev.materiais,{...mat,id:matRow.id}]}));
+      setDia(prev=>({...prev, materiais:[...prev.materiais,{...mat,id:matRow.id}]}));
       showToast(`Material ${mat.codigo} adicionado.`);
     } catch(e) { showToast("Erro ao adicionar material.","error"); }
   }
@@ -894,7 +894,7 @@ export default function App() {
     setDia(prev=>({...prev,materiais:prev.materiais.map(m=>m.id===mat.id?mat:m)}));
     try {
       await supabase.from("materiais").update({codigo:mat.codigo,resina:mat.resina,nome:mat.codigo}).eq("id",mat.id);
-      const updates=ENSAIOS_DEFAULT.map(e=>({material_id:mat.id,ensaio_id:e.id,status:mat.cells[e.id]?.status||"na",operador:mat.cells[e.id]?.operador||null,hora:mat.cells[e.id]?.hora||null,updated_at:new Date().toISOString()}));
+      const updates = ENSAIOS_DEFAULT.map(e=>({material_id:mat.id,ensaio_id:e.id,status:mat.cells[e.id]?.status||"na",operador:mat.cells[e.id]?.operador||null,hora:mat.cells[e.id]?.hora||null,updated_at:new Date().toISOString()}));
       await supabase.from("ensaios").upsert(updates,{onConflict:"material_id,ensaio_id"});
       showToast("Material atualizado.");
     } catch(e) { showToast("Erro ao editar.","error"); }
@@ -913,40 +913,46 @@ export default function App() {
     catch(e) { setDia(prev=>({...prev,materiais:bk})); showToast("Erro ao limpar.","error"); }
   }
 
-  const anotacaoTimers=useRef({});
-  function handleAnotacaoChange(turnoNum,texto) {
-    setDia(prev=>({...prev,anotacoes:prev.anotacoes.map(a=>a.turno_num===turnoNum?{...a,texto}:a)}));
+  // Salva anotação automaticamente com debounce enquanto o usuário digita
+  const anotacaoTimers = useRef({});
+  function handleAnotacaoChange(turnoNum, texto) {
+    setDia(prev=>({...prev, anotacoes:prev.anotacoes.map(a=>a.turno_num===turnoNum?{...a,texto}:a)}));
+    // Cancela o timer anterior e agenda um novo save após 800ms sem digitar
     if (anotacaoTimers.current[turnoNum]) clearTimeout(anotacaoTimers.current[turnoNum]);
-    anotacaoTimers.current[turnoNum]=setTimeout(async()=>{
-      try { await supabase.from("turno_anotacoes").upsert({dia_id:dia.id,turno_num:turnoNum,texto,finalizado:false},{onConflict:"dia_id,turno_num"}); }
-      catch(e) {}
-    },800);
-  }
-
-  async function handleChangeTurnoAtivo(turnoNum) {
-    setDia(prev=>({...prev,turnoAtivo:turnoNum}));
-    try { await supabase.from("dias").update({turno_ativo:turnoNum}).eq("id",dia.id); }
-    catch(e) { showToast("Erro ao atualizar turno.","error"); }
+    anotacaoTimers.current[turnoNum] = setTimeout(async ()=>{
+      try {
+        await supabase.from("turno_anotacoes").upsert(
+          {dia_id:dia.id, turno_num:turnoNum, texto, finalizado:false},
+          {onConflict:"dia_id,turno_num"}
+        );
+      } catch(e) { /* silencioso */ }
+    }, 800);
   }
 
   async function handleFinalizarTurno() {
-    const turnoNum=dia.turnoAtivo;
-    const texto=dia.anotacoes.find(a=>a.turno_num===turnoNum)?.texto||"";
+    const turnoNum = dia.turnoAtivo;
+    const texto = dia.anotacoes.find(a=>a.turno_num===turnoNum)?.texto||"";
     try {
-      await supabase.from("turno_anotacoes").upsert({dia_id:dia.id,turno_num:turnoNum,texto,finalizado:true},{onConflict:"dia_id,turno_num"});
-      const proximo=turnoNum===3?null:turnoNum+1;
+      // Salva anotação e marca como finalizada
+      await supabase.from("turno_anotacoes").upsert({dia_id:dia.id, turno_num:turnoNum, texto, finalizado:true},{onConflict:"dia_id,turno_num"});
+      // Avança para o próximo turno
+      const proximo = turnoNum===3 ? null : turnoNum+1;
       await supabase.from("dias").update({turno_ativo:proximo||turnoNum}).eq("id",dia.id);
-      setDia(prev=>({...prev,turnoAtivo:proximo||turnoNum,anotacoes:prev.anotacoes.map(a=>a.turno_num===turnoNum?{...a,finalizado:true}:a)}));
+      setDia(prev=>({
+        ...prev,
+        turnoAtivo: proximo||turnoNum,
+        anotacoes: prev.anotacoes.map(a=>a.turno_num===turnoNum?{...a,finalizado:true}:a)
+      }));
       showToast(`${TURNOS.find(t=>t.id===turnoNum)?.label} finalizado!`);
-    } catch(e) { showToast("Erro ao finalizar turno.","error"); }
+    } catch(e) { showToast("Erro ao finalizar turno.","error"); console.error(e); }
   }
 
   async function handleFinalizarDia() {
-    const isPast=dia.date!==today();
+    const isPast = dia.date!==today();
     try {
       await supabase.from("dias").update({finalizado:true}).eq("id",dia.id);
       setHistorico(prev=>[{...dia,finalizado:true},...prev].sort((a,b)=>b.date.localeCompare(a.date)));
-      const novoDia=await fetchDiaByDate(today());
+      const novoDia = await fetchDiaByDate(today());
       setDia(novoDia);
       showToast(isPast?`Dia ${fmtDate(dia.date)} salvo no histórico!`:"Dia finalizado e salvo no histórico! ✓");
     } catch(e) { showToast("Erro ao finalizar o dia.","error"); }
@@ -963,20 +969,30 @@ export default function App() {
   }
 
   async function handleChangeDia(dateStr) {
-    try { const d=await fetchDiaByDate(dateStr); setDia(d); }
-    catch(e) { showToast("Erro ao carregar dia.","error"); }
+    try {
+      setLoading(true);
+      const d = await fetchDiaByDate(dateStr);
+      setDia(d);
+    } catch(e) { showToast("Erro ao carregar dia.","error"); }
+    finally { setLoading(false); }
   }
 
-  const primeiroNome=session?.user?.user_metadata?.full_name?.split(" ")[0]||session?.user?.email?.split("@")[0]||"Usuário";
-  const progress=dia?calcProgress(dia.materiais):{pct:0};
+  const primeiroNome = session?.user?.user_metadata?.full_name?.split(" ")[0] || session?.user?.email?.split("@")[0] || "Usuário";
+  const progress = dia ? calcProgress(dia.materiais) : {pct:0};
 
-  if (session===undefined||(session!==null&&initialLoad)) return (
+  if (session===undefined) return (
     <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
       <div style={{fontSize:32}}>🧪</div>
       <div style={{fontSize:16,fontWeight:600,color:"#1a3a2a"}}>Carregando LabQuality...</div>
     </div>
   );
   if (session===null) return <AuthPage />;
+  if (loading) return (
+    <div style={{minHeight:"100vh",background:"#f5f3ef",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{fontSize:32}}>🧪</div>
+      <div style={{fontSize:16,fontWeight:600,color:"#1a3a2a"}}>Carregando dados...</div>
+    </div>
+  );
 
   const NAV=[{id:"dashboard",label:"Dashboard",icon:"📊"},{id:"indicadores",label:"Indicadores",icon:"📈"},{id:"historico",label:"Histórico",icon:"📁"}];
 
@@ -1010,9 +1026,10 @@ export default function App() {
           <button onClick={()=>supabase.auth.signOut()} style={{padding:"5px 12px",borderRadius:7,border:"1px solid rgba(123,201,154,.3)",background:"transparent",color:"#7bc99a",cursor:"pointer",fontSize:12,fontWeight:600}}>Sair</button>
         </div>
       </div>
+
       <main style={{maxWidth:1400,margin:"0 auto",padding:"2rem 24px"}}>
         <Legend />
-        {page==="dashboard"&&dia&&<DashboardPage dia={dia} onFinalizarTurno={handleFinalizarTurno} onFinalizarDia={handleFinalizarDia} onAddMaterial={handleAddMaterial} onUpdateCell={handleUpdateCell} onEditMaterial={handleEditMaterial} onRemoveMaterial={handleRemoveMaterial} onLimparDashboard={handleLimparDashboard} onAnotacaoChange={handleAnotacaoChange} onChangeDia={handleChangeDia} onChangeTurnoAtivo={handleChangeTurnoAtivo} />}
+        {page==="dashboard"&&dia&&<DashboardPage dia={dia} onFinalizarTurno={handleFinalizarTurno} onFinalizarDia={handleFinalizarDia} onAddMaterial={handleAddMaterial} onUpdateCell={handleUpdateCell} onEditMaterial={handleEditMaterial} onRemoveMaterial={handleRemoveMaterial} onLimparDashboard={handleLimparDashboard} onAnotacaoChange={handleAnotacaoChange} onChangeDia={handleChangeDia} />}
         {page==="indicadores"&&dia&&<IndicadoresPage diaAtual={dia} historico={historico} />}
         {page==="historico"&&<HistoricoPage historico={historico} loading={false} onReopenDia={handleReopenDia} />}
       </main>
